@@ -1,0 +1,256 @@
+# =============================================================================
+# Experiment Configuration - 消融实验配置
+# Version: v1.0
+# =============================================================================
+
+# 实验基本信息
+experiment:
+  name: "multi_modal_ablation"
+  description: "多模态LOB-Trade融合模型消融实验"
+  version: "v2.0"
+
+# =============================================================================
+# 数据配置 (所有实验统一)
+# =============================================================================
+data:
+  history_T: 3000          # 历史窗口 (100ms * 3000 = 5min)
+  sample_stride: 20        # 采样步长 (减少样本重叠)
+  split_ratio: 0.8         # 训练/验证划分比例
+  num_levels: 10           # LOB档位数
+
+# =============================================================================
+# DataLoader配置
+# =============================================================================
+dataloader:
+  batch_size: 512
+  num_workers: 4
+  pin_memory: true
+  drop_last: true
+  device: "cuda"
+
+# =============================================================================
+# 训练配置 (所有实验统一)
+# =============================================================================
+training:
+  epochs: 50
+  # learning_rate: 0.001
+  # weight_decay: 0.001
+  
+  # # 学习率调度
+  # scheduler:
+  #   type: "cosine"         # Options: "cosine", "step", "plateau"
+  #   warmup_epochs: 1
+  #   min_lr: 0.00001
+  optimizer:
+    type: "AdamW"
+    lr: 0.0005
+    weight_decay: 0.002
+    betas: [0.9, 0.999]
+    eps: 1.0e-8
+
+# -----------------------------------------------------------------------------
+# Learning Rate Scheduler Configuration
+# -----------------------------------------------------------------------------
+  scheduler:
+    type: "CosineAnnealingWarmRestarts"
+    T_0: 1                 # 第一次重启的epoch数
+    T_mult: 1                # 重启周期倍增因子
+    eta_min: 1.0e-6          # 最小学习率
+  # 早停
+  early_stopping:
+    enabled: true
+    patience: 5
+    monitor: "loss"  # 核心指标
+    mode: "min"
+    min_delta: 0.001
+    
+  # 混合精度
+  use_amp: true
+  
+  # 梯度裁剪
+  gradient_clip: 1.0
+  
+  # 梯度累积 (可选，用于模拟更大batch)
+  gradient_accumulation_steps: 1
+
+# =============================================================================
+# 损失函数配置
+# =============================================================================
+loss:
+  # 主损失
+  cls_weight: 1.0
+  reg_weight: 0.0          # 设为0则不使用回归损失
+  
+  # Focal Loss配置
+  use_focal: true
+  focal_alpha: 1.0
+  focal_gamma: 2.0
+  class_weights: null
+  label_smoothing: 0.0
+  
+  # 对比学习损失 (仅在启用时使用)
+  contrastive_weight: 0.1
+  temporal_weight: 0.05
+
+
+  classification:
+    type: "FocalLoss"
+    alpha: 1.0
+    gamma: 2.0
+    class_weights: null    # 可选: [1.0, 0.5, 1.0] 针对不平衡
+  regression:
+    type: "HuberLoss"
+    delta: 1.0
+  loss_weight: 1.0      # 分类损失权重 (回归权重 = 1 - loss_weight)
+# =============================================================================
+# 评估配置
+# =============================================================================
+evaluation:
+  eval_every_n_epochs: 1
+  save_best_only: true
+  metrics_to_track:
+    - accuracy
+    - f1_macro
+    - f1_updown
+    - f1_up
+    - f1_down
+    - directional_accuracy
+    - signal_quality
+
+# =============================================================================
+# 随机种子配置 (可复现性)
+# =============================================================================
+seeds: [42]
+
+
+# =============================================================================
+# 模型变体配置
+# =============================================================================
+model_variants:
+  # M0: Baseline
+  M0_baseline:
+    use_cross_features: false
+    use_early_cross_attention: false
+    use_hierarchical: false
+    use_event_driven_trade: false
+    use_mamba: false
+    use_contrastive_loss: false
+    
+  # M1: +CrossFeatures
+  M1_cross_features:
+    use_cross_features: true
+    use_early_cross_attention: false
+    use_hierarchical: false
+    use_event_driven_trade: false
+    use_mamba: false
+    use_contrastive_loss: false
+    
+  # M2: +EarlyCrossAttn
+  M2_early_cross_attn:
+    use_cross_features: false
+    use_early_cross_attention: true
+    use_hierarchical: false
+    use_event_driven_trade: false
+    use_mamba: false
+    use_contrastive_loss: false
+    
+  # M3: +EventTrade
+  M3_event_trade:
+    use_cross_features: false
+    use_early_cross_attention: false
+    use_hierarchical: false
+    use_event_driven_trade: true
+    use_mamba: false
+    use_contrastive_loss: false
+    
+  # M4: +Hierarchical
+  M4_hierarchical:
+    use_cross_features: false
+    use_early_cross_attention: false
+    use_hierarchical: true
+    use_event_driven_trade: false
+    use_mamba: false
+    use_contrastive_loss: false
+    
+  # M5: +Contrastive
+  M5_contrastive:
+    use_cross_features: false
+    use_early_cross_attention: false
+    use_hierarchical: false
+    use_event_driven_trade: false
+    use_mamba: false
+    use_contrastive_loss: true
+    
+  # M6: +Mamba
+  M6_mamba:
+    use_cross_features: false
+    use_early_cross_attention: false
+    use_hierarchical: false
+    use_event_driven_trade: false
+    use_mamba: true
+    use_contrastive_loss: false
+    
+  # M7: Cross + Early (组合)
+  M7_cross_and_early:
+    use_cross_features: true
+    use_early_cross_attention: true
+    use_hierarchical: false
+    use_event_driven_trade: false
+    use_mamba: false
+    use_contrastive_loss: false
+
+# =============================================================================
+# 基础模型配置 (所有变体共享)
+# =============================================================================
+base_model:
+  lob_encoder:
+    in_channels: 4           # [ask_price, bid_price, ask_notional, bid_notional]
+    base_channels: 32
+    num_layers: 3
+    time_strides: [5, 5, 2]  # 总降频: 5*5*2=50
+    level_strides: [2, 2, 2]
+    kernel_sizes:
+      time: 3
+      level: 2
+    dropout: 0.1
+    
+  trade_encoder:
+    in_features: 12
+    hidden_channels: [32, 32, 32]
+    kernel_size: [5, 5, 2]
+    time_stride: [5, 5, 2]   # 与LOB对齐
+    dropout: 0.1
+    use_revin: True
+    
+  fusion:
+    strategy: "gated"
+    d_model: 32
+    use_layer_norm: False
+    num_cross_layers: 2      # 用于早期跨模态注意力
+    nhead: 4
+    dropout: 0.0
+    
+  transformer:
+    d_model: 32
+    nhead: 4
+    num_layers: 1
+    dim_feedforward: 128
+    dropout: 0.5
+    positional_encoding: "sinusoidal"
+    max_seq_len: 500
+    
+  output_head:
+    num_classes: 3
+    pooling: "last"
+    return_regression: false
+
+# =============================================================================
+# 输出配置
+# =============================================================================
+output:
+  checkpoint_dir: "experiments/ablation_checkpoints"
+  log_dir: "/root/tf-logs/ablation_logs"
+  results_dir: "experiments/ablation_results"
+  log_interval: 10
+  use_tensorboard: true
+

@@ -1,0 +1,28 @@
+# 模型权重/检查点
+checkpoints/
+weights/
+*.pth
+*.pt
+*.ckpt
+
+# 数据集
+data/
+datasets/
+raw_data/
+
+# 训练日志
+logs/
+runs/
+output/
+experiments/
+
+# Python缓存
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 虚拟环境
+venv/
+env/
+.miniconda/

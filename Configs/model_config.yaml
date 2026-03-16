@@ -1,0 +1,62 @@
+# =============================================================================
+# Model Configuration - Multi-Modal LOB & Trade Architecture
+# Version: v2.0
+# =============================================================================
+model_version: "multi_modal_model_2"
+description: "1.lob和trade的数据 2.使用的是trade的即时标签进行训练"
+# -----------------------------------------------------------------------------
+# LOB Encoder Configuration (Causal Downsampling CNN)
+# -----------------------------------------------------------------------------
+lob_encoder:
+  in_channels: 4           # [ask_price, bid_price, ask_vol, bid_vol]
+  base_channels: 16        # 基础通道数
+  num_layers: 3                # 降采样层数
+  time_strides: [5, 2, 2]  # 时间维度降采样步长 (总降频: 2*5*1=10)
+  level_strides: [2, 2, 2] # Level维度降采样步长
+  kernel_sizes:
+    time: 3                # 时间卷积核大小
+    level: 2               # Level卷积核大小
+  # activation: "leaky_relu"
+  dropout: 0.1
+
+# # -----------------------------------------------------------------------------
+# # Trade Encoder Configuration (1D Causal CNN)
+# # -----------------------------------------------------------------------------
+trade_encoder:
+  in_features: 23           # Trade聚合特征数 (Updated: Relative & Log features)
+  hidden_channels: [16, 16,16]
+  kernel_size: [5, 2, 2]
+  time_stride: [5, 2,2]        # 降采样倍率，需与LOB对齐
+  # activation: "relu"
+  dropout: 0.1
+
+# trade_encoder:
+#   null
+# -----------------------------------------------------------------------------
+# Feature Fusion Configuration
+# -----------------------------------------------------------------------------
+fusion:
+  strategy: "gated"  # Options: "late_concat", "cross_attention", "gated"
+  d_model: 32             # 融合后的特征维度
+  use_layer_norm: False
+
+# -----------------------------------------------------------------------------
+# Transformer Backbone Configuration
+# -----------------------------------------------------------------------------
+transformer:
+  d_model: 32             # 必须与 fusion.d_model 一致
+  nhead: 4                 # 注意力头数 (d_model % nhead == 0)
+  num_layers: 3            # Encoder层数
+  dim_feedforward: 128     # FFN隐藏层维度
+  dropout: 0.3
+  # activation: "gelu"
+  positional_encoding: "sinusoidal"  # Options: "sinusoidal", "learnable", "relative"
+  max_seq_len: 500        # 最大序列长度 (降采样后)
+
+# -----------------------------------------------------------------------------
+# Output Head Configuration
+# -----------------------------------------------------------------------------
+output_head:
+  num_classes: 3           # 分类类别数 [Down, Stationary, Up]
+  return_regression: False  # 是否同时输出回归值
+  pooling: "last"          # Options: "last", "mean", "attention"

@@ -1,0 +1,30 @@
+model_checkpoint: "checkpoints/multi_modal_model_2/seed_42/best_model.pt"
+model_config: "/root/lio/Trade_LOB_MultiModal/checkpoints/multi_modal_model_2/model_config.yaml"
+
+data:
+  lob_path: "/root/autodl-tmp/test_data/lob_data.npy"
+  trade_path: "/root/autodl-tmp/test_data/trade_data.npy"
+  label_path: "/root/autodl-tmp/test_data/trade_labels_ret.npy"
+  price_path: "/root/autodl-tmp/test_data/price_data.npy"
+
+signal_config:
+  history_T: 3000
+  signal_stride: 100
+  batch_size: 512
+  num_workers: 4
+  pin_memory: true
+  alpha: 0.001
+  use_amp: true
+
+prediction_eval:
+  ic_rolling_window: 500
+  confidence_bins: 5
+
+backtest:
+  strategy: "discrete"
+  fee_rate: 0.0001
+  slippage: 0.0
+  score_threshold: 0.0
+  risk_free_rate: 0.0
+
+output_dir: "backtest_results/"
