@@ -27,3 +27,6 @@ venv/
 env/
 .miniconda/
 .ipynb_checkpoints/
+
+## 分叉
+._*

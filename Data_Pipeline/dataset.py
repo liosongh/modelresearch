@@ -57,6 +57,7 @@ class MultiModalDataset(Dataset):
             #     tensor = tensor.contiguous()
             # 🔴 提前完成所有维度变换（只做1次，而非每个样本重复做）
             if key == 'lob':
+                tensor = tensor.unsqueeze(1)
                 # (N, C, L) → (C, N, L) （后续切片直接取T长度）
                 tensor = tensor.permute(1, 0, 2).cuda().contiguous()
             elif key == 'trade':
@@ -116,20 +117,8 @@ class MultiModalDataset(Dataset):
         start = base_idx
         end = start + self.T
         
-        # 构建样本字典
-        # sample = {}
-        # for key in self.modalities:
-        #     if key == 'lob':
-        #         # (C, N, L) → (C, T, L) （直接切片，无运算）
-        #         sample[key] = self.data[key][:, :, start:end]
-        #     elif key == 'trade':
-        #         # (F, N) → (F, T)
-        #         sample[key] = self.data[key][:, start:end]
-        #     else:
-        #         # (1, N) → (1, T)
-        #         sample[key] = self.data[key][:, start:end]
 
-        sample = {
+        seq_x = {
             "lob": self.data["lob"][:, start:end, :],
             "trade": self.data["trade"][:, start:end],
         }
@@ -137,7 +126,7 @@ class MultiModalDataset(Dataset):
         # 标签索引对应窗口末端
         label_idx = end - 1  # 对应 labels[T-1 + start] 在原始数据中
         
-        return sample, self.labels[label_idx], self.returns[label_idx]
+        return seq_x, self.labels[label_idx], self.returns[label_idx]
 
 
 def multimodal_collate_fn(batch: List) -> Tuple[Dict[str, torch.Tensor], torch.Tensor, torch.Tensor]:

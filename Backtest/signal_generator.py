@@ -1,213 +1,161 @@
-"""
-回测信号生成模块。
-"""
-
-from __future__ import annotations
-
-from pathlib import Path
-from typing import Any, Dict, Tuple
+# =============================================================================
+# Signal Generator - 模型加载与信号生成
+# =============================================================================
 
 import numpy as np
-import polars as pl
+import pandas as pd
 import torch
-import yaml
-from torch.amp import autocast
-from tqdm import tqdm
+import torch.nn.functional as F
+from torch.utils.data import Dataset, DataLoader
+from pathlib import Path
+from typing import Tuple
 
-from Data_Pipeline.dataset import create_dataloaders_for_test
-from Model import MultiModalTransformer
-
-
-def _build_class_labels(labels_ret: np.ndarray, alpha: float = 0.001) -> np.ndarray:
-    """把连续收益率标签转换为三分类标签。"""
-    labels_class = np.ones_like(labels_ret, dtype=np.int64)
-    labels_class[labels_ret > alpha] = 2
-    labels_class[labels_ret < -alpha] = 0
-    return labels_class
+from Model.multi_modal_transformer import MultiModalTransformer
+from Utils.config_loader import load_config
 
 
-def _load_model(
-    model_config_path: str,
-    checkpoint_path: str,
-    device: str,
-) -> Tuple[torch.nn.Module, bool]:
-    """加载模型结构与权重，并返回是否需要 trade 模态。"""
-    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
-    if "model_state_dict" not in checkpoint:
-        raise KeyError(f"checkpoint 缺少 model_state_dict: {checkpoint_path}")
-    state_dict = checkpoint["model_state_dict"]
+class InferenceDataset(Dataset):
+    """轻量推理数据集，仅加载 LOB 数据，CPU 上构建。"""
 
-    with open(model_config_path, "r", encoding="utf-8") as f:
-        model_cfg = yaml.safe_load(f)
+    def __init__(self, lob_data: np.ndarray, history_T: int, stride: int = 1):
+        """
+        Args:
+            lob_data: (N, 40) LOB 数据
+            history_T: 历史窗口长度
+            stride: 采样步长
+        """
+        self.lob = torch.as_tensor(lob_data, dtype=torch.float32)  # (N, 40)
+        self.T = history_T
+        self.valid_indices = np.arange(0, len(lob_data) - history_T + 1, stride)
+
+    def __len__(self):
+        return len(self.valid_indices)
+
+    def __getitem__(self, idx):
+        start = self.valid_indices[idx]
+        end = start + self.T
+        # (1, T, 40) — 匹配模型输入 (B, C=1, T, L=40)
+        lob_window = self.lob[start:end].unsqueeze(0)
+        label_idx = end - 1  # 信号对应的时间索引
+        return lob_window, label_idx
 
 
-    # 优先按 checkpoint 判断是否真的包含 trade 分支参数
-    has_trade_weights = any(k.startswith("trade_encoder.") for k in state_dict.keys())
-    cfg_has_trade = model_cfg.get("trade_encoder") is not None
-    use_trade = bool(has_trade_weights and cfg_has_trade)
+class SignalGenerator:
+    """加载训练好的模型，对测试集进行推理，生成交易信号。"""
 
-    if use_trade:
+    def __init__(self, config: dict):
+        self.config = config
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+    def load_model(self) -> MultiModalTransformer:
+        """加载模型结构和权重。"""
+        model_config_path = self.config['model_config']
+        checkpoint_path = self.config['model_checkpoint']
+
         model = MultiModalTransformer.from_config(model_config_path)
-    else:
-        # 兼容 LOB-only checkpoint
-        model = MultiModalTransformer(
-            lob_config=model_cfg.get("lob_encoder", {}),
-            trade_config=None,
-            fusion_config=model_cfg.get("fusion", {}),
-            transformer_config=model_cfg.get("transformer", {}),
-            output_config=model_cfg.get("output_head", {}),
+
+        checkpoint = torch.load(checkpoint_path, map_location=self.device)
+        model.load_state_dict(checkpoint['model_state_dict'])
+        model.to(self.device)
+        model.eval()
+
+        print(f"模型加载完成: {checkpoint_path}")
+        if 'metrics' in checkpoint:
+            print(f"  验证指标: {checkpoint['metrics']}")
+        return model
+
+    def load_data(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """加载测试集数据。返回 (lob_data, labels_ret, time_bucket)。"""
+        data_cfg = self.config['data']
+
+        lob_data = np.load(data_cfg['lob_path'])
+        labels_ret = np.load(data_cfg['label_path'])
+        time_bucket = np.load(data_cfg['time_bucket_path'])
+
+        print(f"数据加载完成:")
+        print(f"  LOB: {lob_data.shape}, Labels: {labels_ret.shape}, TimeBucket: {time_bucket.shape}")
+        return lob_data, labels_ret, time_bucket
+
+    def generate_signals(
+        self, model: MultiModalTransformer, lob_data: np.ndarray, time_bucket: np.ndarray
+    ) -> pd.DataFrame:
+        """
+        批量推理生成信号。
+
+        Returns:
+            DataFrame: [timestamp, pred_class, prob_down, prob_stationary, prob_up, signal_lob_idx]
+        """
+        sig_cfg = self.config['signal_config']
+        history_T = sig_cfg['history_T']
+        stride = sig_cfg['signal_stride']
+        batch_size = sig_cfg['batch_size']
+        use_amp = sig_cfg.get('use_amp', False)
+
+        dataset = InferenceDataset(lob_data, history_T, stride)
+        dataloader = DataLoader(
+            dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            num_workers=sig_cfg.get('num_workers', 0),
+            pin_memory=sig_cfg.get('pin_memory', False),
         )
 
+        all_timestamps = []
+        all_pred_classes = []
+        all_probs = []
+        all_lob_indices = []
 
-    model.load_state_dict(state_dict, strict=True)
-    model.to(device)
-    model.eval()
-    return model, use_trade
+        with torch.no_grad():
+            for batch_lob, batch_label_idx in dataloader:
+                batch_lob = batch_lob.to(self.device)
+                inputs = {'lob': batch_lob}
 
+                if use_amp and self.device.type == 'cuda':
+                    with torch.amp.autocast('cuda'):
+                        logits = model(inputs)
+                else:
+                    logits = model(inputs)
 
-def _prepare_test_data(
-    lob_data: np.ndarray,
-    trade_data: np.ndarray | None,
-    labels_ret: np.ndarray,
-    alpha: float,
-    use_trade: bool,
-) -> Tuple[Dict[str, np.ndarray], np.ndarray, np.ndarray]:
-    """直接使用传入的测试集数据，不做任何切分。"""
-    data_dict: Dict[str, np.ndarray] = {"lob": lob_data}
-    if use_trade and trade_data is not None:
-        data_dict["trade"] = trade_data
+                probs = F.softmax(logits, dim=1)  # (B, 3)
+                pred_classes = torch.argmax(probs, dim=1)  # (B,)
 
-    test_labels_ret = labels_ret
-    test_labels_class = _build_class_labels(test_labels_ret, alpha=alpha)
-    return data_dict, test_labels_class, test_labels_ret
+                batch_label_idx_np = batch_label_idx.numpy()
+                all_timestamps.extend(time_bucket[batch_label_idx_np].tolist())
+                all_pred_classes.extend(pred_classes.cpu().numpy().tolist())
+                all_probs.extend(probs.cpu().numpy().tolist())
+                all_lob_indices.extend(batch_label_idx_np.tolist())
 
+        probs_array = np.array(all_probs)
+        signals = pd.DataFrame({
+            'timestamp': all_timestamps,
+            'pred_class': all_pred_classes,
+            'prob_down': probs_array[:, 0],
+            'prob_stationary': probs_array[:, 1],
+            'prob_up': probs_array[:, 2],
+            'signal_lob_idx': all_lob_indices,
+        })
 
-def generate_signals(backtest_config: Dict[str, Any]) -> pl.DataFrame:
-    """
-    在测试集上按固定间隔生成交易信号。
+        # 按时间排序
+        signals = signals.sort_values('timestamp').reset_index(drop=True)
+        print(f"信号生成完成: {len(signals)} 条信号")
+        print(f"  类别分布: {signals['pred_class'].value_counts().to_dict()}")
+        return signals
 
-    Returns:
-        pl.DataFrame: [
-            tick_idx, pred_class, p_down, p_stationary, p_up,
-            pred_score, actual_return, actual_class, price
-        ]
-    """
-    signal_cfg = backtest_config.get("signal_config", {})
-    data_cfg = backtest_config.get("data", {})
+    def run(self) -> Tuple[pd.DataFrame, np.ndarray, np.ndarray, np.ndarray]:
+        """
+        完整流程：加载模型 → 加载数据 → 生成信号 → 保存。
 
-    history_t = int(signal_cfg.get("history_T", 3000))
-    signal_stride = int(signal_cfg.get("signal_stride", 100))
-    batch_size = int(signal_cfg.get("batch_size", 512))
-    num_workers = int(signal_cfg.get("num_workers", 4))
-    pin_memory = bool(signal_cfg.get("pin_memory", True))
-    alpha = float(signal_cfg.get("alpha", 0.001))
+        Returns:
+            (signals_df, lob_data, labels_ret, time_bucket)
+        """
+        model = self.load_model()
+        lob_data, labels_ret, time_bucket = self.load_data()
+        signals = self.generate_signals(model, lob_data, time_bucket)
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    use_amp = bool(signal_cfg.get("use_amp", True)) and device.startswith("cuda")
+        # 保存信号
+        result_dir = Path(self.config.get('output', {}).get('result_dir', 'Backtest/result'))
+        result_dir.mkdir(parents=True, exist_ok=True)
+        signals.to_csv(result_dir / 'signals.csv', index=False)
+        print(f"信号已保存至: {result_dir / 'signals.csv'}")
 
-    lob_data = np.load(data_cfg["lob_path"])
-    trade_path = data_cfg.get("trade_path")
-    trade_data = np.load(trade_path) if trade_path else None
-    labels_ret = np.load(data_cfg["label_path"])
-    price_data = np.load(data_cfg["price_path"]).astype(np.float64)
-
-    model, use_trade = _load_model(
-        model_config_path=backtest_config["model_config"],
-        checkpoint_path=backtest_config["model_checkpoint"],
-        device=device,
-    )
-
-    test_dict, test_labels_class, test_labels_ret = _prepare_test_data(
-        lob_data=lob_data,
-        trade_data=trade_data,
-        labels_ret=labels_ret,
-        alpha=alpha,
-        use_trade=use_trade,
-    )
-
-    loader_cfg = {
-        "history_T": history_t,
-        "batch_size": batch_size,
-        "num_workers": num_workers,
-        "pin_memory": pin_memory,
-        "stride": signal_stride,
-    }
-    test_loader = create_dataloaders_for_test(
-        data_dict=test_dict,
-        labels=test_labels_class,
-        returns=test_labels_ret,
-        config=loader_cfg,
-        device="cpu",
-    )
-
-    pred_classes = []
-    pred_probas = []
-    actual_returns = []
-    tick_indices = []
-    prices = []
-
-    with torch.no_grad():
-        global_row = 0
-        for inputs, _, returns in tqdm(test_loader, desc="Generating signals", leave=False):
-            if not isinstance(inputs, dict):
-                raise TypeError("输入格式异常，期望 dict[str, Tensor]。")
-            inputs = {k: v.to(device, non_blocking=True) for k, v in inputs.items()}
-
-            with autocast(device_type="cuda", enabled=use_amp):
-                logits = model(inputs)
-                probas = torch.softmax(logits, dim=1)
-
-            preds = torch.argmax(probas, dim=1).cpu().numpy()
-            probas_np = probas.cpu().numpy()
-            returns_np = returns.numpy()
-
-            batch_now = preds.shape[0]
-            for j in range(batch_now):
-                dataset_idx = global_row + j
-                start_idx_in_test = dataset_idx * signal_stride
-                test_tick_idx = (history_t - 1) + start_idx_in_test
-                if test_tick_idx >= len(price_data):
-                    continue
-
-                raw_tick_idx = test_tick_idx
-                tick_indices.append(int(raw_tick_idx))
-                pred_classes.append(int(preds[j]))
-                pred_probas.append(probas_np[j])
-                actual_returns.append(float(returns_np[j]))
-                prices.append(float(price_data[test_tick_idx]))
-
-            global_row += batch_now
-
-    if len(pred_classes) == 0:
-        raise RuntimeError("未生成任何信号，请检查数据长度与 history_T / stride 配置。")
-
-    pred_probas_arr = np.asarray(pred_probas, dtype=np.float64)
-    pred_score = pred_probas_arr[:, 2] - pred_probas_arr[:, 0]
-
-    actual_return_arr = np.asarray(actual_returns, dtype=np.float64)
-    actual_class = np.ones_like(actual_return_arr, dtype=np.int64)
-    actual_class[actual_return_arr > alpha] = 2
-    actual_class[actual_return_arr < -alpha] = 0
-
-    signal_df = pl.DataFrame(
-        {
-            "tick_idx": tick_indices,
-            "pred_class": pred_classes,
-            "p_down": pred_probas_arr[:, 0],
-            "p_stationary": pred_probas_arr[:, 1],
-            "p_up": pred_probas_arr[:, 2],
-            "pred_score": pred_score,
-            "actual_return": actual_returns,
-            "actual_class": actual_class,
-            "price": prices,
-        }
-    )
-    return signal_df
-
-
-def save_signals(signal_df: pl.DataFrame, output_dir: str) -> None:
-    """保存信号表。"""
-    out_dir = Path(output_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    signal_df.write_parquet(out_dir / "signals.parquet")
-    signal_df.write_csv(out_dir / "signals.csv")
+        return signals, lob_data, labels_ret, time_bucket

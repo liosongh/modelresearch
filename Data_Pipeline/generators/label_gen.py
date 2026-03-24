@@ -21,7 +21,8 @@ def generate_trade_labels(trade_data: pl.DataFrame,
     m_previous = pl.col('vwap')
     rolling_vwap = (pl.col('total_notional') * pl.col('has_trade')).rolling_sum(window_size=window) / (pl.col('total_volume').rolling_sum(window_size=window) + 1e-9)
     m_future = rolling_vwap.shift(-window)
-    ret = (m_future - m_previous) / m_previous
+    # ret = (m_future - m_previous) / m_previous
+    ret = (m_future / m_previous).log()
     trade_data = trade_data.with_columns(
         ret.alias(f'trade_return')
     )
@@ -41,7 +42,8 @@ def generate_data_dict(lob_data_path: str,
                         levels = 10,
                         label_window=3000,
 
-                        need_price: bool = False
+                        need_price: bool = False,
+                        need_time: bool = False
                         ) -> dict:
     lob_data = pl.read_parquet(lob_data_path)
     trade_data = pl.read_parquet(trade_data_path)
@@ -60,10 +62,15 @@ def generate_data_dict(lob_data_path: str,
     lob_data = generate_channel_data(lob_data,levels = levels)
 
     trade_labels = trade_labels.sort('time_bucket',descending=False)
+    time_bucker = None
+    if need_time:
+        time_bucker = trade_labels.select(
+        pl.col('time_bucket')).to_numpy().flatten()
     trade_labels = trade_labels.select(
         pl.col('trade_return')
     ).to_numpy().flatten()
 
+    
     trade_data = trade_data.sort('time_bucket',descending=False)
     price_data= None
     if need_price:
@@ -103,7 +110,7 @@ def generate_data_dict(lob_data_path: str,
         'lob':lob_data,
         'trade':trade_data
     }
-    return data_dict,trade_labels,price_data
+    return data_dict,trade_labels,price_data,time_bucker
 
 
 

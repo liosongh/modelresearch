@@ -1,138 +1,246 @@
-"""
-回测引擎：信号驱动持仓管理。
-"""
-
-from __future__ import annotations
-
-from typing import Any, Dict, Tuple
+# =============================================================================
+# Backtest Engine - 高频回测引擎
+# =============================================================================
 
 import numpy as np
-import polars as pl
+import pandas as pd
+from dataclasses import dataclass, field
+from typing import List, Optional
 
 
-def _annualization_factor() -> int:
-    # 6.5 小时/天，10 秒一个信号周期，250 天/年
-    return 250 * 2340
+@dataclass
+class BacktestResult:
+    """回测结果容器。"""
+    trades: pd.DataFrame            # 逐笔交易记录
+    equity_curve: pd.DataFrame      # 权益曲线
+    signals_with_match: pd.DataFrame  # 信号-行情匹配日志
+    config: dict = field(default_factory=dict)
 
 
-def _positions_from_signals(
-    pred_class: np.ndarray,
-    pred_score: np.ndarray,
-    strategy: str,
-    score_threshold: float,
-) -> np.ndarray:
-    if strategy == "discrete":
-        # Up=+1, Down=-1, Stationary=0
-        return np.where(pred_class == 2, 1.0, np.where(pred_class == 0, -1.0, 0.0))
-    if strategy == "continuous":
-        pos = pred_score.astype(np.float64).copy()
-        pos[np.abs(pos) < score_threshold] = 0.0
-        return pos
-    raise ValueError(f"未知策略类型: {strategy}")
-
-
-def _compute_drawdown(nav: np.ndarray) -> Dict[str, Any]:
-    running_max = np.maximum.accumulate(nav)
-    drawdown = (running_max - nav) / np.maximum(running_max, 1e-12)
-    mdd = float(np.max(drawdown))
-    end_idx = int(np.argmax(drawdown))
-    start_idx = int(np.argmax(nav[: end_idx + 1])) if end_idx >= 0 else 0
-    return {
-        "drawdown_series": drawdown,
-        "mdd": mdd,
-        "mdd_start_idx": start_idx,
-        "mdd_end_idx": end_idx,
-    }
-
-
-def run_backtest(signal_df: pl.DataFrame, backtest_config: Dict[str, Any]) -> Dict[str, Any]:
+class BacktestEngine:
     """
-    运行单策略回测，返回完整指标与时序结果。
+    高频回测引擎。
+
+    核心规则：
+    - 做多（买入）：按 LOB 卖一价（ask1）成交
+    - 做空（卖出）：按 LOB 买一价（bid1）成交
+    - 100ms 执行延迟：信号 LOB 索引 + execution_delay
+    - 全仓操作，无杠杆
+    - 手续费 + 滑点双向收取
     """
-    strategy = backtest_config.get("strategy", "discrete")
-    fee_rate = float(backtest_config.get("fee_rate", 0.0001))
-    slippage = float(backtest_config.get("slippage", 0.0))
-    score_threshold = float(backtest_config.get("score_threshold", 0.0))
-    risk_free_rate = float(backtest_config.get("risk_free_rate", 0.0))
 
-    pred_class = signal_df["pred_class"].to_numpy()
-    pred_score = signal_df["pred_score"].to_numpy()
-    price = signal_df["price"].to_numpy().astype(np.float64)
-    tick_idx = signal_df["tick_idx"].to_numpy().astype(np.int64)
+    # LOB 列索引
+    ASK1_PRICE_IDX = 0
+    BID1_PRICE_IDX = 2
 
-    if price.size < 2:
-        raise ValueError("信号点数量不足，至少需要 2 个信号点进行回测。")
+    def __init__(self, config: dict):
+        bt_cfg = config['backtest']
+        self.fee_rate = bt_cfg.get('fee_rate', 0.0001)
+        self.slippage = bt_cfg.get('slippage', 0.0001)
+        self.initial_capital = bt_cfg.get('initial_capital', 1_000_000)
+        self.execution_delay = bt_cfg.get('execution_delay', 1)
 
-    # 区间收益：第 i 个信号点到 i+1 信号点
-    start_price = price[:-1]
-    end_price = price[1:]
-    period_return = (end_price - start_price) / np.maximum(start_price, 1e-12)
+    def _extract_prices(self, lob_row: np.ndarray):
+        """提取 ask1 和 bid1 价格。"""
+        return lob_row[self.ASK1_PRICE_IDX], lob_row[self.BID1_PRICE_IDX]
 
-    # 持仓在当前周期固定为第 i 个信号决定
-    position_all = _positions_from_signals(pred_class, pred_score, strategy, score_threshold)
-    position = position_all[:-1]
+    def _apply_cost_buy(self, price: float) -> float:
+        """买入成本：价格上浮（滑点 + 手续费）。"""
+        return price * (1 + self.slippage + self.fee_rate)
 
-    # 交易成本：仓位变化时扣费
-    pos_change = np.abs(position_all[1:] - position_all[:-1])
-    trans_cost = pos_change * (fee_rate + slippage)
+    def _apply_cost_sell(self, price: float) -> float:
+        """卖出成本：价格下压（滑点 + 手续费）。"""
+        return price * (1 - self.slippage - self.fee_rate)
 
-    gross_pnl = position * period_return
-    net_pnl = gross_pnl - trans_cost
+    def run(
+        self,
+        signals: pd.DataFrame,
+        lob_data: np.ndarray,
+        time_bucket: np.ndarray,
+    ) -> BacktestResult:
+        """
+        执行回测。
 
-    nav = np.cumprod(1.0 + net_pnl)
-    cumulative_return = float(nav[-1] - 1.0)
-    periods = net_pnl.size
-    ann_factor = _annualization_factor()
+        Args:
+            signals: SignalGenerator 输出的信号 DataFrame
+            lob_data: (N, 40) LOB 原始数据
+            time_bucket: (N,) 时间戳数组
 
-    annualized_return = float((1.0 + cumulative_return) ** (ann_factor / max(periods, 1)) - 1.0)
-    pnl_mean = float(np.mean(net_pnl))
-    pnl_std = float(np.std(net_pnl))
-    sharpe = float((pnl_mean - risk_free_rate / ann_factor) / pnl_std * np.sqrt(ann_factor)) if pnl_std > 1e-12 else 0.0
+        Returns:
+            BacktestResult
+        """
+        N = len(lob_data)
 
-    dd = _compute_drawdown(nav)
-    mdd = dd["mdd"]
-    calmar = float(annualized_return / mdd) if mdd > 1e-12 else 0.0
+        # 状态变量
+        position = 0        # 0=空仓, 1=多头, -1=空头
+        capital = self.initial_capital
+        entry_price = 0.0
+        shares = 0.0
 
-    win_mask = net_pnl > 0
-    loss_mask = net_pnl < 0
-    avg_profit = float(np.mean(net_pnl[win_mask])) if win_mask.any() else 0.0
-    avg_loss = float(np.mean(np.abs(net_pnl[loss_mask]))) if loss_mask.any() else 0.0
-    profit_loss_ratio = float(avg_profit / avg_loss) if avg_loss > 1e-12 else 0.0
+        # 记录
+        trades: List[dict] = []
+        equity_records: List[dict] = []
+        signal_match_records: List[dict] = []
 
-    metrics = {
-        "strategy": strategy,
-        "annualized_return": annualized_return,
-        "cumulative_return": cumulative_return,
-        "max_drawdown": float(mdd),
-        "max_drawdown_start_tick": int(tick_idx[dd["mdd_start_idx"]]),
-        "max_drawdown_end_tick": int(tick_idx[min(dd["mdd_end_idx"] + 1, tick_idx.size - 1)]),
-        "sharpe_ratio": sharpe,
-        "calmar_ratio": calmar,
-        "total_trades": int(np.sum(pos_change > 0)),
-        "total_cost": float(np.sum(trans_cost)),
-        "win_rate": float(np.mean(win_mask)),
-        "profit_loss_ratio": profit_loss_ratio,
-        "avg_period_return": pnl_mean,
-        "period_return_std": pnl_std,
-        "num_periods": int(periods),
-        "annualization_factor": int(ann_factor),
-    }
+        for _, row in signals.iterrows():
+            signal_lob_idx = int(row['signal_lob_idx'])
+            exec_lob_idx = signal_lob_idx + self.execution_delay
+            pred_class = int(row['pred_class'])
 
-    result_df = pl.DataFrame(
-        {
-            "tick_idx_start": tick_idx[:-1],
-            "tick_idx_end": tick_idx[1:],
-            "position": position,
-            "period_return": period_return,
-            "gross_pnl": gross_pnl,
-            "transaction_cost": trans_cost,
-            "net_pnl": net_pnl,
-            "nav": nav,
-            "drawdown": dd["drawdown_series"],
-        }
-    )
+            # 边界检查
+            if exec_lob_idx >= N:
+                break
 
-    return {
-        "metrics": metrics,
-        "result_df": result_df,
-    }
+            ask1, bid1 = self._extract_prices(lob_data[exec_lob_idx])
+            mid_price = (ask1 + bid1) / 2.0
+            exec_timestamp = time_bucket[exec_lob_idx]
+
+            # 信号-行情匹配记录
+            signal_match_records.append({
+                'signal_timestamp': row['timestamp'],
+                'exec_timestamp': exec_timestamp,
+                'pred_class': pred_class,
+                'prob_down': row['prob_down'],
+                'prob_stationary': row['prob_stationary'],
+                'prob_up': row['prob_up'],
+                'ask1': ask1,
+                'bid1': bid1,
+                'mid_price': mid_price,
+                'signal_lob_idx': signal_lob_idx,
+                'exec_lob_idx': exec_lob_idx,
+            })
+
+            # ========== 交易逻辑 ==========
+            if pred_class == 2:  # 预测涨 → 做多
+                if position == -1:
+                    # 先平空（买入平仓）
+                    close_price = self._apply_cost_buy(ask1)
+                    pnl = shares * (entry_price - close_price)
+                    capital += pnl
+                    trades.append({
+                        'timestamp': exec_timestamp,
+                        'action': 'close_short',
+                        'exec_price': close_price,
+                        'shares': shares,
+                        'pnl': pnl,
+                        'position_after': 0,
+                        'capital_after': capital,
+                    })
+                    position = 0
+                    shares = 0.0
+
+                if position == 0:
+                    # 开多（买入）
+                    exec_price = self._apply_cost_buy(ask1)
+                    shares = capital / exec_price
+                    entry_price = exec_price
+                    position = 1
+                    trades.append({
+                        'timestamp': exec_timestamp,
+                        'action': 'open_long',
+                        'exec_price': exec_price,
+                        'shares': shares,
+                        'pnl': 0.0,
+                        'position_after': 1,
+                        'capital_after': capital,
+                    })
+
+            elif pred_class == 0:  # 预测跌 → 做空
+                if position == 1:
+                    # 先平多（卖出平仓）
+                    close_price = self._apply_cost_sell(bid1)
+                    pnl = shares * (close_price - entry_price)
+                    capital += pnl
+                    trades.append({
+                        'timestamp': exec_timestamp,
+                        'action': 'close_long',
+                        'exec_price': close_price,
+                        'shares': shares,
+                        'pnl': pnl,
+                        'position_after': 0,
+                        'capital_after': capital,
+                    })
+                    position = 0
+                    shares = 0.0
+
+                if position == 0:
+                    # 开空（卖出）
+                    exec_price = self._apply_cost_sell(bid1)
+                    shares = capital / exec_price
+                    entry_price = exec_price
+                    position = -1
+                    trades.append({
+                        'timestamp': exec_timestamp,
+                        'action': 'open_short',
+                        'exec_price': exec_price,
+                        'shares': shares,
+                        'pnl': 0.0,
+                        'position_after': -1,
+                        'capital_after': capital,
+                    })
+
+            # pred_class == 1 (Stationary) → 不操作
+
+            # ========== 逐步权益计算 ==========
+            if position == 1:
+                unrealized = shares * (mid_price - entry_price)
+            elif position == -1:
+                unrealized = shares * (entry_price - mid_price)
+            else:
+                unrealized = 0.0
+
+            equity = capital + unrealized
+            equity_records.append({
+                'timestamp': exec_timestamp,
+                'equity': equity,
+                'capital': capital,
+                'unrealized': unrealized,
+                'position': position,
+            })
+
+        # 收尾：如果有持仓，按最后时刻平仓
+        if position != 0 and len(equity_records) > 0:
+            last_exec_idx = int(signals.iloc[-1]['signal_lob_idx']) + self.execution_delay
+            if last_exec_idx < N:
+                ask1, bid1 = self._extract_prices(lob_data[last_exec_idx])
+                if position == 1:
+                    close_price = self._apply_cost_sell(bid1)
+                    pnl = shares * (close_price - entry_price)
+                else:
+                    close_price = self._apply_cost_buy(ask1)
+                    pnl = shares * (entry_price - close_price)
+                capital += pnl
+                trades.append({
+                    'timestamp': time_bucket[last_exec_idx],
+                    'action': f'final_close_{"long" if position == 1 else "short"}',
+                    'exec_price': close_price,
+                    'shares': shares,
+                    'pnl': pnl,
+                    'position_after': 0,
+                    'capital_after': capital,
+                })
+
+        trades_df = pd.DataFrame(trades) if trades else pd.DataFrame(
+            columns=['timestamp', 'action', 'exec_price', 'shares', 'pnl', 'position_after', 'capital_after']
+        )
+        equity_df = pd.DataFrame(equity_records) if equity_records else pd.DataFrame(
+            columns=['timestamp', 'equity', 'capital', 'unrealized', 'position']
+        )
+        signal_match_df = pd.DataFrame(signal_match_records)
+
+        print(f"回测完成:")
+        print(f"  总交易次数: {len(trades_df)}")
+        print(f"  最终资金: {capital:,.2f}")
+        print(f"  总收益率: {(capital / self.initial_capital - 1) * 100:.4f}%")
+
+        return BacktestResult(
+            trades=trades_df,
+            equity_curve=equity_df,
+            signals_with_match=signal_match_df,
+            config={
+                'fee_rate': self.fee_rate,
+                'slippage': self.slippage,
+                'initial_capital': self.initial_capital,
+                'execution_delay': self.execution_delay,
+            },
+        )

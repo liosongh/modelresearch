@@ -171,10 +171,10 @@ class Trainer:
             # batch_start_time = time.perf_counter()
 
             # 移动数据到设备
-            if isinstance(inputs, dict):
-                inputs = {k: v.to(self.device, non_blocking=True) for k, v in inputs.items()}
-            else:
-                inputs = inputs.to(self.device, non_blocking=True)
+            # if isinstance(inputs, dict):
+            inputs = {k: v.to(self.device, non_blocking=True) for k, v in inputs.items()}
+            # else:
+            #     inputs = inputs.to(self.device, non_blocking=True)
             labels = labels.to(self.device, non_blocking=True)
             returns = returns.to(self.device, non_blocking=True)
 
@@ -189,34 +189,34 @@ class Trainer:
                 # cls_pred = output['backbone_output']
                 reg_pred = None
                 losses = self.loss_fn(cls_pred, labels, reg_pred, returns)
-                loss = losses['total'] / self.grad_accumulation_steps
+                loss = losses['total'] #/ self.grad_accumulation_steps
 
             # self._sync_cuda_if_needed(profile_this_step and self.profile_sync_cuda)
             # forward_time = time.perf_counter() - forward_start_time
             # backward_start_time = time.perf_counter()
 
-            # 反向传播
-            if self.use_amp:
-                self.scaler.scale(loss).backward()
-            else:
-                loss.backward()
+            # # 反向传播
+            # if self.use_amp:
+            self.scaler.scale(loss).backward()
+            # else:
+            #     loss.backward()
             
             # self._sync_cuda_if_needed(profile_this_step and self.profile_sync_cuda)
             # backward_time = time.perf_counter() - backward_start_time
             # optimizer_start_time = time.perf_counter()
 
             # 梯度累积
-            if (batch_idx + 1) % self.grad_accumulation_steps == 0:
-                if self.use_amp:
-                    self.scaler.unscale_(self.optimizer)
-                    # torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
-                    self.scaler.step(self.optimizer)
-                    self.scaler.update()
-                else:
-                    # torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
-                    self.optimizer.step()
+            # if (batch_idx + 1) % self.grad_accumulation_steps == 0:
+                # if self.use_amp:
+            self.scaler.unscale_(self.optimizer)
+            # torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
+                # else:
+                #     # torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.max_grad_norm)
+                #     self.optimizer.step()
                     
-                self.optimizer.zero_grad(set_to_none=True)
+            self.optimizer.zero_grad(set_to_none=True)
             
             # self._sync_cuda_if_needed(profile_this_step and self.profile_sync_cuda)
             # optimizer_time = time.perf_counter() - optimizer_start_time
@@ -236,17 +236,18 @@ class Trainer:
             #         'loss': f'{losses["total"].item():.4f}',
             #         # 'step_ms': f'{step_time * 1000:.2f}'
             #     })
-            update_start_time = time.time()
+            # update_start_time = time.time()
             
             # 记录
             running_loss += losses['total'].item() * labels.size(0)
-            
-            with torch.no_grad():
-                preds = torch.argmax(cls_pred, dim=1)
-                all_preds.extend(preds.cpu().numpy())
-                all_labels.extend(labels.cpu().numpy())
-                
-            pbar.set_postfix({'loss': f'{losses["total"].item():.4f}'})
+            ## 每100个batch记录一次
+            if batch_idx % 100 == 0:
+                with torch.no_grad():
+                    preds = torch.argmax(cls_pred, dim=1)
+                    all_preds.extend(preds.cpu().numpy())
+                    all_labels.extend(labels.cpu().numpy())
+                    
+                pbar.set_postfix({'loss': f'{losses["total"].item():.4f}'})
 
             # print(f"update time: {time.time() - update_start_time:.4f}s")
             # loop_end_time = time.perf_counter()
@@ -430,9 +431,10 @@ class Trainer:
     
     def save_checkpoint(self, filename: str, epoch: int, metrics: Dict) -> None:
         """保存检查点。"""
+        model_to_save = self.model._orig_mod if hasattr(self.model, '_orig_mod') else self.model
         checkpoint = {
             'epoch': epoch,
-            'model_state_dict': self.model.state_dict(),
+            'model_state_dict': self.model_to_save.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'metrics': metrics,
         }

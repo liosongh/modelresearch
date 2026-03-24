@@ -1,227 +1,330 @@
-"""
-可视化报告模块。
-"""
+# =============================================================================
+# Backtest Visualization - 回测可视化
+# =============================================================================
 
-from __future__ import annotations
-
-from pathlib import Path
-from typing import Any, Dict
-
-import matplotlib.pyplot as plt
 import numpy as np
-import polars as pl
-import seaborn as sns
-from sklearn.metrics import confusion_matrix
+import pandas as pd
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+from pathlib import Path
+from typing import Optional, List
+
+from .backtest_engine import BacktestResult
+
+# 中文字体支持
+plt.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans']
+plt.rcParams['axes.unicode_minus'] = False
 
 
-def _ensure_output_dir(output_dir: str) -> Path:
-    out = Path(output_dir)
-    out.mkdir(parents=True, exist_ok=True)
-    return out
+class BacktestVisualizer:
+    """回测结果可视化。"""
 
+    def __init__(self, output_dir: str = "Backtest/result"):
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
 
-def _rolling_sharpe(net_pnl: np.ndarray, window: int, annualization_factor: int) -> np.ndarray:
-    if net_pnl.size < window:
-        return np.array([], dtype=np.float64)
-    out = np.zeros(net_pnl.size - window + 1, dtype=np.float64)
-    for i in range(out.size):
-        seg = net_pnl[i : i + window]
-        seg_std = np.std(seg)
-        out[i] = (np.mean(seg) / seg_std * np.sqrt(annualization_factor)) if seg_std > 1e-12 else 0.0
-    return out
+    def _save_fig(self, fig, name: str):
+        path = self.output_dir / f"{name}.png"
+        fig.savefig(path, dpi=150, bbox_inches='tight')
+        plt.close(fig)
+        print(f"  图表已保存: {path}")
 
+    def plot_equity_curve(
+        self,
+        equity_curve: pd.DataFrame,
+        benchmark: Optional[pd.DataFrame] = None,
+        initial_capital: float = 1_000_000,
+    ):
+        """收益曲线（策略 vs 买入持有基准）。"""
+        fig, ax = plt.subplots(figsize=(14, 6))
 
-def plot_prediction_figures(
-    signal_df: pl.DataFrame,
-    prediction_results: Dict[str, Any],
-    output_dir: str,
-) -> None:
-    out_dir = _ensure_output_dir(output_dir)
-    sns.set_style("whitegrid")
+        # 归一化为收益率
+        strategy_ret = equity_curve['equity'].values / initial_capital - 1
+        ax.plot(range(len(strategy_ret)), strategy_ret * 100, label='Strategy', linewidth=1.2)
 
-    pred_class = signal_df["pred_class"].to_numpy()
-    actual_class = signal_df["actual_class"].to_numpy()
-    pred_score = signal_df["pred_score"].to_numpy()
-    actual_return = signal_df["actual_return"].to_numpy()
+        if benchmark is not None and not benchmark.empty:
+            bm_ret = benchmark['equity'].values / benchmark['equity'].iloc[0] - 1
+            # 对齐长度
+            bm_len = min(len(bm_ret), len(strategy_ret))
+            ax.plot(range(bm_len), bm_ret[:bm_len] * 100, label='Buy & Hold', linewidth=1.0, alpha=0.7)
 
-    # 1) 混淆矩阵热力图（归一化）
-    cm = confusion_matrix(actual_class, pred_class, labels=[0, 1, 2], normalize="true")
-    plt.figure(figsize=(6, 5))
-    sns.heatmap(cm, annot=True, fmt=".3f", cmap="Blues", xticklabels=["Down", "Stationary", "Up"], yticklabels=["Down", "Stationary", "Up"])
-    plt.title("Normalized Confusion Matrix")
-    plt.xlabel("Predicted")
-    plt.ylabel("Actual")
-    plt.tight_layout()
-    plt.savefig(out_dir / "prediction_confusion_matrix.png", dpi=160)
-    plt.close()
+        ax.set_xlabel('Signal Step')
+        ax.set_ylabel('Return (%)')
+        ax.set_title('Equity Curve')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        ax.axhline(y=0, color='gray', linestyle='--', alpha=0.5)
 
-    # 2) 条件收益箱线图
-    box_df = pl.DataFrame(
-        {
-            "pred_label": np.where(pred_class == 2, "Up", np.where(pred_class == 0, "Down", "Stationary")),
-            "actual_return": actual_return,
-        }
-    ).to_pandas()
-    plt.figure(figsize=(8, 5))
-    sns.boxplot(data=box_df, x="pred_label", y="actual_return", order=["Down", "Stationary", "Up"])
-    plt.title("Conditional Return by Predicted Class")
-    plt.tight_layout()
-    plt.savefig(out_dir / "prediction_conditional_return_boxplot.png", dpi=160)
-    plt.close()
+        self._save_fig(fig, 'equity_curve')
 
-    # 3) 置信度分箱 vs 胜率
-    conf_df = prediction_results["artifacts"]["confidence_binned_df"].to_pandas()
-    conf_df["bin_label"] = conf_df.apply(lambda r: f"[{r['bin_left']:.1f},{r['bin_right']:.1f}]", axis=1)
-    plt.figure(figsize=(8, 5))
-    sns.barplot(data=conf_df, x="bin_label", y="directional_win_rate", color="#3b82f6")
-    plt.ylim(0, 1)
-    plt.title("Confidence Bin vs Directional Win Rate")
-    plt.xlabel("abs(pred_score) bin")
-    plt.ylabel("Directional Win Rate")
-    plt.tight_layout()
-    plt.savefig(out_dir / "prediction_confidence_bin_winrate.png", dpi=160)
-    plt.close()
+    def plot_drawdown(self, equity_curve: pd.DataFrame):
+        """回撤曲线。"""
+        fig, ax = plt.subplots(figsize=(14, 4))
 
-    # 4) 滚动 IC 时序
-    ic_series = np.asarray(prediction_results["rolling_ic_series"], dtype=np.float64)
-    if ic_series.size > 0:
-        mu = np.mean(ic_series)
-        sigma = np.std(ic_series)
-        plt.figure(figsize=(10, 4))
-        plt.plot(ic_series, label="Rolling IC", linewidth=1.2)
-        plt.axhline(mu, color="red", linestyle="--", label="mean")
-        plt.axhline(mu + sigma, color="gray", linestyle=":", label="+1σ")
-        plt.axhline(mu - sigma, color="gray", linestyle=":")
-        plt.title("Rolling IC")
-        plt.legend()
-        plt.tight_layout()
-        plt.savefig(out_dir / "prediction_rolling_ic.png", dpi=160)
-        plt.close()
+        equity_values = equity_curve['equity'].values
+        peak = np.maximum.accumulate(equity_values)
+        drawdown = (peak - equity_values) / peak * 100
 
-    # 5) pred_score vs actual_return 散点图（下采样）
-    n = pred_score.size
-    if n > 12000:
-        idx = np.linspace(0, n - 1, 12000).astype(int)
-        x = pred_score[idx]
-        y = actual_return[idx]
-    else:
-        x = pred_score
-        y = actual_return
-    plt.figure(figsize=(6, 5))
-    plt.scatter(x, y, s=6, alpha=0.25)
-    plt.title("Pred Score vs Actual Return")
-    plt.xlabel("pred_score")
-    plt.ylabel("actual_return")
-    plt.tight_layout()
-    plt.savefig(out_dir / "prediction_score_vs_return.png", dpi=160)
-    plt.close()
+        ax.fill_between(range(len(drawdown)), drawdown, color='red', alpha=0.3)
+        ax.plot(range(len(drawdown)), drawdown, color='red', linewidth=0.8)
 
+        ax.set_xlabel('Signal Step')
+        ax.set_ylabel('Drawdown (%)')
+        ax.set_title('Drawdown Curve')
+        ax.grid(True, alpha=0.3)
+        ax.invert_yaxis()
 
-def plot_backtest_figures(
-    backtest_result: Dict[str, Any],
-    output_dir: str,
-    rolling_sharpe_window: int = 200,
-) -> None:
-    out_dir = _ensure_output_dir(output_dir)
-    sns.set_style("whitegrid")
+        self._save_fig(fig, 'drawdown')
 
-    result_df = backtest_result["result_df"]
-    metrics = backtest_result["metrics"]
+    def plot_signal_distribution(self, signals: pd.DataFrame):
+        """信号类别分布。"""
+        fig, axes = plt.subplots(1, 2, figsize=(12, 5))
 
-    tick_idx = result_df["tick_idx_end"].to_numpy()
-    nav = result_df["nav"].to_numpy()
-    drawdown = result_df["drawdown"].to_numpy()
-    position = result_df["position"].to_numpy()
-    net_pnl = result_df["net_pnl"].to_numpy()
+        # 类别分布柱状图
+        class_names = {0: 'Down', 1: 'Stationary', 2: 'Up'}
+        counts = signals['pred_class'].value_counts().sort_index()
+        colors = ['#e74c3c', '#95a5a6', '#2ecc71']
+        bars = axes[0].bar(
+            [class_names.get(i, str(i)) for i in counts.index],
+            counts.values,
+            color=[colors[i] for i in counts.index],
+        )
+        axes[0].set_title('Signal Class Distribution')
+        axes[0].set_ylabel('Count')
+        for bar, val in zip(bars, counts.values):
+            axes[0].text(bar.get_x() + bar.get_width() / 2, bar.get_height(),
+                         str(val), ha='center', va='bottom', fontsize=10)
 
-    # 1) 累计净值
-    plt.figure(figsize=(10, 4))
-    plt.plot(tick_idx, nav, linewidth=1.2)
-    plt.title(f"Strategy NAV ({metrics['strategy']})")
-    plt.xlabel("tick_idx")
-    plt.ylabel("NAV")
-    plt.tight_layout()
-    plt.savefig(out_dir / f"backtest_nav_{metrics['strategy']}.png", dpi=160)
-    plt.close()
+        # 概率分布直方图
+        axes[1].hist(signals['prob_up'], bins=50, alpha=0.6, label='P(Up)', color='#2ecc71')
+        axes[1].hist(signals['prob_down'], bins=50, alpha=0.6, label='P(Down)', color='#e74c3c')
+        axes[1].set_title('Prediction Probability Distribution')
+        axes[1].set_xlabel('Probability')
+        axes[1].set_ylabel('Count')
+        axes[1].legend()
 
-    # 2) 回撤曲线
-    plt.figure(figsize=(10, 3))
-    plt.fill_between(tick_idx, -drawdown, 0.0, alpha=0.35)
-    plt.title(f"Underwater Curve ({metrics['strategy']})")
-    plt.xlabel("tick_idx")
-    plt.ylabel("Drawdown")
-    plt.tight_layout()
-    plt.savefig(out_dir / f"backtest_drawdown_{metrics['strategy']}.png", dpi=160)
-    plt.close()
+        fig.tight_layout()
+        self._save_fig(fig, 'signal_distribution')
 
-    # 3) 仓位时序
-    plt.figure(figsize=(10, 3))
-    plt.step(tick_idx, position, where="post")
-    plt.title(f"Position Time Series ({metrics['strategy']})")
-    plt.xlabel("tick_idx")
-    plt.ylabel("position")
-    plt.tight_layout()
-    plt.savefig(out_dir / f"backtest_position_{metrics['strategy']}.png", dpi=160)
-    plt.close()
+    def plot_pnl_distribution(self, trades: pd.DataFrame):
+        """单笔交易盈亏分布。"""
+        close_trades = trades[trades['action'].str.startswith('close') | trades['action'].str.startswith('final')]
+        if close_trades.empty:
+            print("  无平仓交易，跳过盈亏分布图")
+            return
 
-    # 4) 每期 PnL 分布
-    plt.figure(figsize=(7, 4))
-    sns.histplot(net_pnl, bins=80, kde=True)
-    plt.title(f"Period Net PnL Distribution ({metrics['strategy']})")
-    plt.tight_layout()
-    plt.savefig(out_dir / f"backtest_pnl_hist_{metrics['strategy']}.png", dpi=160)
-    plt.close()
+        fig, ax = plt.subplots(figsize=(10, 5))
 
-    # 5) 滚动夏普
-    rs = _rolling_sharpe(net_pnl, rolling_sharpe_window, metrics["annualization_factor"])
-    if rs.size > 0:
-        rs_tick = tick_idx[rolling_sharpe_window - 1 :]
-        plt.figure(figsize=(10, 3))
-        plt.plot(rs_tick, rs, linewidth=1.1)
-        plt.axhline(0.0, color="gray", linestyle="--", linewidth=0.9)
-        plt.title(f"Rolling Sharpe ({metrics['strategy']})")
-        plt.xlabel("tick_idx")
-        plt.ylabel("Sharpe")
-        plt.tight_layout()
-        plt.savefig(out_dir / f"backtest_rolling_sharpe_{metrics['strategy']}.png", dpi=160)
-        plt.close()
+        pnls = close_trades['pnl'].values
+        colors = ['#2ecc71' if p > 0 else '#e74c3c' for p in pnls]
 
+        ax.hist(pnls, bins=50, color='#3498db', alpha=0.7, edgecolor='white')
+        ax.axvline(x=0, color='black', linestyle='--', alpha=0.5)
+        ax.axvline(x=pnls.mean(), color='orange', linestyle='--', label=f'Mean: {pnls.mean():.2f}')
 
-def plot_dashboard_table(
-    summary: Dict[str, Any],
-    output_dir: str,
-    filename: str = "dashboard_metrics.png",
-) -> None:
-    out_dir = _ensure_output_dir(output_dir)
+        ax.set_xlabel('PnL')
+        ax.set_ylabel('Count')
+        ax.set_title(f'Trade PnL Distribution (n={len(pnls)})')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
 
-    # 扁平化展示
-    rows = []
-    for section, values in summary.items():
-        if isinstance(values, dict):
-            for k, v in values.items():
-                if isinstance(v, (dict, list)):
+        self._save_fig(fig, 'pnl_distribution')
+
+    def plot_cumulative_trades(self, trades: pd.DataFrame):
+        """累计盈亏曲线（按交易笔数）。"""
+        close_trades = trades[trades['action'].str.startswith('close') | trades['action'].str.startswith('final')]
+        if close_trades.empty:
+            return
+
+        fig, ax = plt.subplots(figsize=(12, 5))
+
+        cum_pnl = close_trades['pnl'].cumsum()
+        ax.plot(range(len(cum_pnl)), cum_pnl.values, linewidth=1.2)
+        ax.axhline(y=0, color='gray', linestyle='--', alpha=0.5)
+        ax.set_xlabel('Trade Number')
+        ax.set_ylabel('Cumulative PnL')
+        ax.set_title('Cumulative PnL by Trade')
+        ax.grid(True, alpha=0.3)
+
+        self._save_fig(fig, 'cumulative_pnl')
+
+    def plot_signal_midprice_detail(
+        self,
+        result: BacktestResult,
+        lob_data: np.ndarray,
+        time_bucket: np.ndarray,
+        window_seconds: float = 60.0,
+        num_windows: int = 4,
+        execution_delay: int = 1,
+    ):
+        """
+        信号与 midprice 交互可视化。
+
+        在指定时长窗口内绘制 100ms 粒度的 midprice 走势，
+        并用标记标注买入（开多/平空）和卖出（开空/平多）交易点。
+
+        Args:
+            result: 回测结果
+            lob_data: (N, 40) LOB 原始数据
+            time_bucket: (N,) 时间戳
+            window_seconds: 每个窗口时长（秒），默认 60s
+            num_windows: 生成多少个窗口子图
+            execution_delay: 执行延迟 tick 数
+        """
+        trades = result.trades
+        if trades.empty:
+            print("  无交易记录，跳过信号-midprice 交互图")
+            return
+
+        ASK1_IDX, BID1_IDX = 0, 2
+
+        # 推断时间戳单位：如果值 > 1e12 视为毫秒，否则视为秒
+        ts_sample = float(time_bucket[0])
+        ts_is_ms = ts_sample > 1e12
+        ticks_per_second = 10  # 100ms 间隔
+        window_ticks = int(window_seconds * ticks_per_second)
+
+        # 找到有交易的时间戳，选取分散的窗口
+        trade_timestamps = trades['timestamp'].values
+        trade_lob_indices = []
+        for ts in trade_timestamps:
+            idx = np.searchsorted(time_bucket, ts)
+            if idx < len(time_bucket):
+                trade_lob_indices.append(idx)
+        trade_lob_indices = np.array(trade_lob_indices)
+
+        if len(trade_lob_indices) == 0:
+            print("  无法匹配交易时间戳，跳过信号-midprice 交互图")
+            return
+
+        # 选取 num_windows 个有交易的窗口，均匀分布在整个回测时段
+        window_centers = self._select_window_centers(
+            trade_lob_indices, window_ticks, len(lob_data), num_windows
+        )
+
+        if len(window_centers) == 0:
+            print("  无法找到合适的窗口，跳过信号-midprice 交互图")
+            return
+
+        # 绘图
+        n_plots = len(window_centers)
+        fig, axes = plt.subplots(n_plots, 1, figsize=(16, 5 * n_plots))
+        if n_plots == 1:
+            axes = [axes]
+
+        for i, center in enumerate(window_centers):
+            ax = axes[i]
+            start = max(0, center - window_ticks // 2)
+            end = min(len(lob_data), start + window_ticks)
+            start = max(0, end - window_ticks)  # 保证窗口长度
+
+            # midprice 曲线
+            ask1 = lob_data[start:end, ASK1_IDX]
+            bid1 = lob_data[start:end, BID1_IDX]
+            mid = (ask1 + bid1) / 2.0
+
+            # X 轴：相对秒数
+            x_seconds = np.arange(len(mid)) * 0.1  # 100ms = 0.1s
+
+            ax.plot(x_seconds, mid, color='#2c3e50', linewidth=0.8, label='Mid Price', zorder=1)
+            ax.fill_between(x_seconds, bid1, ask1, color='#3498db', alpha=0.1, label='Bid-Ask Spread')
+
+            # 标注交易
+            window_ts_start = time_bucket[start]
+            window_ts_end = time_bucket[end - 1]
+
+            buy_actions = ('open_long', 'close_short')
+            sell_actions = ('open_short', 'close_long', 'final_close_long', 'final_close_short')
+
+            for _, trade in trades.iterrows():
+                t_ts = trade['timestamp']
+                if t_ts < window_ts_start or t_ts > window_ts_end:
                     continue
-                rows.append((section, k, v))
 
-    if len(rows) == 0:
-        return
+                # 找到这笔交易在窗口内的位置
+                t_idx = np.searchsorted(time_bucket, t_ts)
+                if t_idx < start or t_idx >= end:
+                    continue
 
-    fig_h = min(0.32 * len(rows) + 1.5, 24)
-    plt.figure(figsize=(12, fig_h))
-    plt.axis("off")
+                x_pos = (t_idx - start) * 0.1
+                action = trade['action']
 
-    cell_text = [[r[0], r[1], f"{r[2]:.6f}" if isinstance(r[2], float) else str(r[2])] for r in rows]
-    table = plt.table(
-        cellText=cell_text,
-        colLabels=["section", "metric", "value"],
-        cellLoc="left",
-        loc="center",
-    )
-    table.auto_set_font_size(False)
-    table.set_fontsize(9)
-    table.scale(1, 1.2)
+                if action in buy_actions:
+                    ax.scatter(x_pos, trade['exec_price'], marker='^', color='#e74c3c',
+                               s=120, zorder=3, edgecolors='black', linewidths=0.5)
+                    ax.annotate(action.replace('_', ' '), (x_pos, trade['exec_price']),
+                                textcoords='offset points', xytext=(5, 10),
+                                fontsize=7, color='#e74c3c', fontweight='bold')
+                else:
+                    ax.scatter(x_pos, trade['exec_price'], marker='v', color='#2ecc71',
+                               s=120, zorder=3, edgecolors='black', linewidths=0.5)
+                    ax.annotate(action.replace('_', ' '), (x_pos, trade['exec_price']),
+                                textcoords='offset points', xytext=(5, -15),
+                                fontsize=7, color='#2ecc71', fontweight='bold')
 
-    plt.title("Backtest Summary Dashboard", pad=16)
-    plt.tight_layout()
-    plt.savefig(out_dir / filename, dpi=160)
-    plt.close()
+            ax.set_xlabel('Time (seconds)')
+            ax.set_ylabel('Price')
+            window_label = f"Window {i+1}: LOB index [{start}, {end})"
+            if ts_is_ms:
+                from datetime import datetime
+                t_start_str = datetime.fromtimestamp(window_ts_start / 1000).strftime('%H:%M:%S')
+                t_end_str = datetime.fromtimestamp(window_ts_end / 1000).strftime('%H:%M:%S')
+                window_label += f"  ({t_start_str} ~ {t_end_str})"
+            ax.set_title(window_label)
+            ax.legend(loc='upper left', fontsize=8)
+            ax.grid(True, alpha=0.3)
+
+        fig.suptitle('Signal & Mid-Price Detail (100ms resolution)', fontsize=14, y=1.01)
+        fig.tight_layout()
+        self._save_fig(fig, 'signal_midprice_detail')
+
+    @staticmethod
+    def _select_window_centers(
+        trade_lob_indices: np.ndarray,
+        window_ticks: int,
+        data_len: int,
+        num_windows: int,
+    ) -> List[int]:
+        """从有交易的位置中均匀选取窗口中心点。"""
+        # 按位置排序去重
+        unique_indices = np.unique(trade_lob_indices)
+
+        # 过滤掉边界附近的（确保窗口不越界）
+        half = window_ticks // 2
+        valid = unique_indices[(unique_indices >= half) & (unique_indices < data_len - half)]
+        if len(valid) == 0:
+            return []
+
+        if len(valid) <= num_windows:
+            return valid.tolist()
+
+        # 均匀选取
+        step = len(valid) / num_windows
+        selected = [valid[int(i * step)] for i in range(num_windows)]
+        return selected
+
+    def generate_all(
+        self,
+        result: BacktestResult,
+        signals: pd.DataFrame,
+        benchmark: Optional[pd.DataFrame] = None,
+        lob_data: Optional[np.ndarray] = None,
+        time_bucket: Optional[np.ndarray] = None,
+    ):
+        """生成所有图表。"""
+        print("生成可视化图表:")
+        initial_capital = result.config.get('initial_capital', 1_000_000)
+
+        self.plot_equity_curve(result.equity_curve, benchmark, initial_capital)
+        self.plot_drawdown(result.equity_curve)
+        self.plot_signal_distribution(signals)
+        self.plot_pnl_distribution(result.trades)
+        self.plot_cumulative_trades(result.trades)
+
+        if lob_data is not None and time_bucket is not None:
+            self.plot_signal_midprice_detail(
+                result, lob_data, time_bucket,
+                execution_delay=result.config.get('execution_delay', 1),
+            )
+
+        print("所有图表生成完成")

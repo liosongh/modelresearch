@@ -5,14 +5,15 @@
 
 import torch
 import torch.nn as nn
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 import yaml
 
-from .encoders.lob_encoder import LOBEncoder
-from .encoders.trade_encoder import TradeEncoder
-from .fusion.feature_fusion import FeatureFusion
-from .backbones.transformer import TransformerBackbone
-from .revin import RevIN, RevIN2d
+from layer.lob_encoder import LOBEncoder
+from layer.deeplob_encoder import Deeplob_encoder
+from layer.trade_encoder import TradeEncoder
+from layer.feature_fusion import FeatureFusion
+from layer.transformer import TransformerBackbone
+from layer.revin import RevIN, RevIN2d
 
 import time
 class MultiModalTransformer(nn.Module):
@@ -52,29 +53,22 @@ class MultiModalTransformer(nn.Module):
         transformer_config = transformer_config or {'d_model': 128, 'nhead': 4, 'num_layers': 3}
         output_config = output_config or {'num_classes': 3, 'return_regression': True}
         
-        self.modalities = []
+        
         encoder_dims = {}
         self.use_revin = use_revin
+        self.lob_multi_scale_outputs = None
         
-        # # --- 0. RevIN 归一化层 (可选) ---
-        # # RevIN 在输入层对每个样本独立归一化，避免信息泄漏
-        # self.lob_revin = None
-        self.trade_revin = None
-        
-        # if use_revin:
-        #     # LOB: (B, C, T, L) -> 对每个通道在 Time 维度归一化
-        #     lob_channels = lob_config.get('in_channels', 4)
-        #     self.lob_revin = None# RevIN2d(num_channels=lob_channels, affine=True)
-            
+        self.modalities = []
         # --- 1. LOB 编码器 ---
-        self.lob_encoder = LOBEncoder(**lob_config)
+        # self.lob_encoder = LOBEncoder(**lob_config)
+        self.lob_encoder = Deeplob_encoder()
         self.modalities.append('lob')
-        # 注意: output_dim 在第一次前向传播后才能确定精确值
-        # 这里先用近似值，后续会动态调整
-        encoder_dims['lob'] = lob_config.get('base_channels', 32)
+        # 直接使用编码器声明的输出维度，兼容多尺度聚合后的 scale_output_dim
+        encoder_dims['lob'] = self.lob_encoder.output_dim
         
         # --- 2. Trade 编码器 (可选) ---
         self.trade_encoder = None
+        self.trade_revin = None
         if trade_config is not None:
             self.trade_encoder = TradeEncoder(**trade_config)
             self.modalities.append('trade')
@@ -97,23 +91,20 @@ class MultiModalTransformer(nn.Module):
         # actual_dims = {k: v.shape[-1] for k, v in encoder_outputs.items()}
         
         self.fusion = FeatureFusion(
-            input_dims=encoder_dims,
-            d_model=self._fusion_config['d_model'],
+            input_dims=encoder_dims, ## 融合前的模态维度
+            d_model=self._fusion_config['d_model'], ## 融合后的维度
             strategy=self._fusion_config.get('strategy', 'late_concat'),
             use_layer_norm=self._fusion_config.get('use_layer_norm', True)
         )
         # ### 为了和之前一样的model
         # self.adapter_conv = nn.Conv1d(encoder_dims['lob'], self.d_model, 1)
         # --- 4. Transformer 主干 ---
-        self.transformer = TransformerBackbone(**transformer_config)
+        self.Backbone = TransformerBackbone(**transformer_config)
         
         # --- 5. 输出头 ---
         self.num_classes = output_config.get('num_classes', 3)
         self.return_regression = output_config.get('return_regression', True)
-        self.pooling = output_config.get('pooling', 'last')
-        
         self.classifier = nn.Linear(self.d_model, self.num_classes)
-        
         if self.return_regression:
             self.regressor = nn.Linear(self.d_model, 1)
         else:
@@ -133,30 +124,12 @@ class MultiModalTransformer(nn.Module):
         ).to(next(self.parameters()).device)
         
         self._fusion_initialized = True
-        
-    def _pool_output(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        对 Transformer 输出进行池化。
-        
-        Args:
-            x: (B, T, d_model)
-            
-        Returns:
-            pooled: (B, d_model)
-        """
-        if self.pooling == 'last':
-            return x[:, -1, :]
-        elif self.pooling == 'mean':
-            return x.mean(dim=1)
-        elif self.pooling == 'max':
-            return x.max(dim=1)[0]
-        else:
-            return x[:, -1, :]
             
     def forward(
-        self, 
-        inputs: Dict[str, torch.Tensor]
-    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        self,
+        inputs: Dict[str, torch.Tensor],
+        return_features: bool = False
+    ) -> Any:
         """
         前向传播。
         
@@ -173,13 +146,14 @@ class MultiModalTransformer(nn.Module):
         
         # 0. RevIN 归一化 (每个样本独立，避免信息泄漏)
         normalized_inputs = {}
-        normalized_inputs_start_time = time.perf_counter()
-        
-        if self.lob_encoder is not None and 'lob' in inputs:
-            # lob_data = inputs['lob'].permute(0, 1, 3, 2).contiguous()
-            # if self.use_revin and self.lob_revin is not None:
-            #     lob_data = self.lob_revin(lob_data, mode='norm')
-            normalized_inputs['lob'] = inputs['lob']
+        # normalized_inputs_start_time = time.perf_counter()
+
+        normalized_inputs['lob'] = inputs['lob']
+        # if self.lob_encoder is not None and 'lob' in inputs:
+        #     # lob_data = inputs['lob'].permute(0, 1, 3, 2).contiguous()
+        #     # if self.use_revin and self.lob_revin is not None:
+        #     #     lob_data = self.lob_revin(lob_data, mode='norm')
+        #     normalized_inputs['lob'] = inputs['lob']
             
         if self.trade_encoder is not None and 'trade' in inputs:
             trade_data = inputs['trade'].permute(0, 1, 2).contiguous()
@@ -196,22 +170,32 @@ class MultiModalTransformer(nn.Module):
                 trade_data = torch.cat([binary_feat, continuous_feat], dim=1)
                 
             normalized_inputs['trade'] = trade_data
-        torch.cuda.synchronize()
-        normalized_inputs_time = time.perf_counter() - normalized_inputs_start_time
-        encoder_start_time = time.perf_counter()
+        # if torch.cuda.is_available():
+        #     torch.cuda.synchronize()
+        # normalized_inputs_time = time.perf_counter() - normalized_inputs_start_time
+        # encoder_start_time = time.perf_counter()
         # 1. 编码各模态
         encoded = {}
-        
         # LOB
         if 'lob' in normalized_inputs:
-            encoded['lob'] = self.lob_encoder(normalized_inputs['lob'])  # (B, T_ds, D_lob)
+            lob_encoded = self.lob_encoder(normalized_inputs['lob'])
+            # 兼容 LOBEncoder 的多尺度输出:
+            # - Tensor: 单尺度输出 (B, T, D)
+            # - Dict: {"final", "scale_dict", "scale_list"}
+            if isinstance(lob_encoded, dict):
+                encoded['lob'] = lob_encoded['final']
+                self.lob_multi_scale_outputs = lob_encoded.get('scale_dict')
+            else:
+                encoded['lob'] = lob_encoded  # (B, T_ds, D_lob)
+                self.lob_multi_scale_outputs = None
             
         # Trade
-        if self.trade_encoder is not None and 'trade' in normalized_inputs:
+        if 'trade' in normalized_inputs:
             encoded['trade'] = self.trade_encoder(normalized_inputs['trade'])  # (B, T_ds, D_trade)
-        torch.cuda.synchronize()
-        encoder_time = time.perf_counter() - encoder_start_time
-        fusion_start_time = time.perf_counter()
+        # if torch.cuda.is_available():
+        #     torch.cuda.synchronize()
+        # encoder_time = time.perf_counter() - encoder_start_time
+        # fusion_start_time = time.perf_counter()
         # # 2. 时间维度对齐检查
         # if len(encoded) > 1:
         #     time_lens = [v.shape[1] for v in encoded.values()]
@@ -227,28 +211,36 @@ class MultiModalTransformer(nn.Module):
         # self.adapter_conv()
         
         fused = self.fusion(encoded)  # (B, T, d_model)
-        torch.cuda.synchronize()
-        fusion_time = time.perf_counter() - fusion_start_time
-        transformer_start_time = time.perf_counter()
+        # if torch.cuda.is_available():
+        #     torch.cuda.synchronize()
+        # fusion_time = time.perf_counter() - fusion_start_time
+        # transformer_start_time = time.perf_counter()
         # 4. Transformer
-        output = self.transformer(fused, causal=True)  # (B, T, d_model)
-        
-        # 5. 池化
-        pooled = self._pool_output(output)  # (B, d_model)
-        
+        output = self.Backbone(fused, causal=True)  # (B, T, d_model)
+        output = output[:, -1, :] ## (B, d_model)
         # 6. 输出头
-        logits = self.classifier(pooled) # (B, num_classes)
-        torch.cuda.synchronize()
-        transformer_time = time.perf_counter() - transformer_start_time
+        logits = self.classifier(output) # (B, num_classes)
+        # if torch.cuda.is_available():
+        #     torch.cuda.synchronize()
+        # transformer_time = time.perf_counter() - transformer_start_time
 
         regression = None
         if self.return_regression and self.regressor is not None:
-            regression = self.regressor(pooled).squeeze(-1)  # (B,)
-        print(f"normalized_inputs_time: {normalized_inputs_time:.4f}")
-        print(f"encoder_time: {encoder_time:.4f}")
-        print(f"fusion_time: {fusion_time:.4f}")
-        print(f"transformer_time: {transformer_time:.4f}")
-        return logits#, regression,None
+            regression = self.regressor(output).squeeze(-1)  # (B,)
+        # print(f"normalized_inputs_time: {normalized_inputs_time:.4f}")
+        # print(f"encoder_time: {encoder_time:.4f}")
+        # print(f"fusion_time: {fusion_time:.4f}")
+        # print(f"transformer_time: {transformer_time:.4f}")
+        if return_features:
+            return {
+                "logits": logits,
+                "encoded": encoded,
+                "fused": fused,
+                "transformer_output": output,
+                "pooled": output,
+                "lob_multi_scale": self.lob_multi_scale_outputs,
+            }
+        return logits
     
     @classmethod
     def from_config(cls, config_path: str) -> 'MultiModalTransformer':
@@ -273,24 +265,3 @@ class MultiModalTransformer(nn.Module):
         )
 
 
-class MultiModalTransformerLOBOnly(MultiModalTransformer):
-    """
-    仅使用 LOB 数据的简化版本。
-    
-    用于与原始模型对比或数据不完整时使用。
-    """
-    
-    def __init__(self, lob_config: dict, transformer_config: dict = None, output_config: dict = None):
-        super().__init__(
-            lob_config=lob_config,
-            trade_config=None,  # 不使用 Trade
-            fusion_config={'d_model': transformer_config.get('d_model', 128) if transformer_config else 128},
-            transformer_config=transformer_config,
-            output_config=output_config
-        )
-        
-    def forward(self, inputs: Dict[str, torch.Tensor]) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
-        # 简化: 只处理 LOB
-        if isinstance(inputs, torch.Tensor):
-            inputs = {'lob': inputs}
-        return super().forward(inputs)

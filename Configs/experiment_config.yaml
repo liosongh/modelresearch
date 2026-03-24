@@ -13,7 +13,7 @@ experiment:
 # 数据配置 (所有实验统一)
 # =============================================================================
 data:
-  history_T: 3000          # 历史窗口 (100ms * 3000 = 5min)
+  history_T: 1200         # 历史窗口 (100ms * 3000 = 5min)
   sample_stride: 20        # 采样步长 (减少样本重叠)
   split_ratio: 0.8         # 训练/验证划分比例
   num_levels: 10           # LOB档位数
@@ -22,7 +22,7 @@ data:
 # DataLoader配置
 # =============================================================================
 dataloader:
-  batch_size: 1024
+  batch_size: 32
   num_workers: 0
   prefetch_factor: null
   pin_memory: null

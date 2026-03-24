@@ -76,8 +76,6 @@ def load_lob_data(data_dir,days = None,date = None,levels = 10):
         output_path = os.path.join(data_dir, parquet_filename)
         if os.path.exists(output_path):
             df = pl.read_parquet(output_path)
-
-
             df = df.select(
                 select_cols
             )

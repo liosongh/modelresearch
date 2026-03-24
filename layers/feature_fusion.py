@@ -37,6 +37,8 @@ class FeatureFusion(nn.Module):
             self.fusion = GatedFusion(input_dims, d_model, use_layer_norm)
         elif strategy == 'cross_attention':
             self.fusion = CrossAttentionFusion(input_dims, d_model, use_layer_norm)
+        elif strategy == 'identity':
+            self.fusion = nn.Identity()
         else:
             raise ValueError(f"Unknown fusion strategy: {strategy}")
             
@@ -69,32 +71,36 @@ class ConcatFusion(nn.Module):
     ):
         super().__init__()
         
+        self.modality_order = sorted(input_dims.keys())
         total_dim = sum(input_dims.values())
+        
+        # 每个模态独立归一化（对齐LOB/Trade特征尺度，超级关键！）
+        self.modality_norms = nn.ModuleDict({
+            name: nn.LayerNorm(dim) for name, dim in input_dims.items()
+        })
         
         self.projector = nn.Linear(total_dim, d_model)
         # self.adapter_conv = nn.Conv1d(input_dims['lob'], d_model, 1)
-        self.norm = nn.LayerNorm(d_model) if use_layer_norm else nn.Identity()
-        self.modality_order = sorted(input_dims.keys())  # 固定顺序
-        
+        self.final_norm = nn.LayerNorm(d_model) if use_layer_norm else nn.Identity()
     def forward(self, features: Dict[str, torch.Tensor]) -> torch.Tensor:
         # 按固定顺序拼接，保证一致性
-        concat_list = [features[k] for k in self.modality_order]
-        
-        # 验证时间维度一致
-        T = concat_list[0].shape[1]
-        for i, f in enumerate(concat_list):
-            assert f.shape[1] == T, f"时间维度不一致: {self.modality_order[0]}={T}, {self.modality_order[i]}={f.shape[1]}"
+        # 1. 每个模态【独立归一化】（解决LOB和Trade数值范围不同的问题）
+        aligned_features = []
+        for name in self.modality_order:
+            feat = features[name]
+            feat = self.modality_norms[name](feat)
+            aligned_features.append(feat)
         
         # Concatenate along feature dimension
-        combined = torch.cat(concat_list, dim=-1)  # (B, T, sum_dims)
+        combined = torch.cat(aligned_features, dim=-1)  # (B, T, sum_dims)
         # ## 为了和之前一样的model
         # combined = combined.permute(0, 2, 1)  # (B, sum_dims, T)
         # out = self.adapter_conv(combined)  # (B, T, d_model)
         # out = out.permute(0, 2, 1)  # (B, T, d_model)
         # Project and normalize
         out = self.projector(combined)  # (B, T, d_model)
-        out = self.norm(out)
-        
+        out = self.final_norm(out)
+
         return out
 
 

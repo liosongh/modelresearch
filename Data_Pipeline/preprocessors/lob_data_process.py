@@ -36,34 +36,45 @@ def process_lob_data(data_dir: str,date: list[str],levels: int = 10) -> pl.DataF
 
 
 
+# def generate_channel_data(data: pl.DataFrame,levels = 10) -> pl.DataFrame:
+#     ## 生成X
+#     channel_list = []
+#     expr_a_notional = [(pl.col(f"a{i}") * pl.col(f"aq{i}")).log1p().alias(f'a_notional_{i}') for i in range(1, levels + 1)]
+#     expr_b_notional = [(pl.col(f"b{i}") * pl.col(f"bq{i}")).log1p().alias(f'b_notional_{i}') for i in range(1, levels + 1)]
+#     data = data.with_columns(expr_a_notional+expr_b_notional)
+#     ##
+#     c1_cols =  [f"a{i}" for i in range(1, levels + 1)] 
+#     c2_cols = [f"aq{i}" for i in range(1, levels + 1)]
+#     c3_cols = [f"b{i}" for i in range(1, levels + 1)]
+#     c4_cols = [f"bq{i}" for i in range(1, levels + 1)]
+#     c5_cols = [f'a_notional_{i}' for i in range(1, levels + 1)]
+#     c6_cols = [f'b_notional_{i}' for i in range(1, levels + 1)]
+#     # c7_cols = [f'b_notional_{i}' for i in range(1, levels + 1)]
+#     # c8_cols = [f'b_notional_{i}' for i in range(1, levels + 1)]
+    
+#     c1 = data.select(c1_cols).to_numpy()
+#     channel_list.append(c1)
+
+#     c3 = data.select(c3_cols).to_numpy()
+#     channel_list.append(c3)
+
+#     c5 = data.select(c5_cols).to_numpy()
+#     channel_list.append(c5)
+#     c6 = data.select(c6_cols).to_numpy()
+#     channel_list.append(c6)
+
+
+#     ## 原始特征的进入模型
+#     X = np.stack(channel_list, axis=1)
+#     return X
+
 def generate_channel_data(data: pl.DataFrame,levels = 10) -> pl.DataFrame:
     ## 生成X
-    channel_list = []
-    expr_a_notional = [(pl.col(f"a{i}") * pl.col(f"aq{i}")).log1p().alias(f'a_notional_{i}') for i in range(1, levels + 1)]
-    expr_b_notional = [(pl.col(f"b{i}") * pl.col(f"bq{i}")).log1p().alias(f'b_notional_{i}') for i in range(1, levels + 1)]
-    data = data.with_columns(expr_a_notional+expr_b_notional)
-    ##
-    c1_cols =  [f"a{i}" for i in range(1, levels + 1)] 
-    c2_cols = [f"aq{i}" for i in range(1, levels + 1)]
-    c3_cols = [f"b{i}" for i in range(1, levels + 1)]
-    c4_cols = [f"bq{i}" for i in range(1, levels + 1)]
-    c5_cols = [f'a_notional_{i}' for i in range(1, levels + 1)]
-    c6_cols = [f'b_notional_{i}' for i in range(1, levels + 1)]
-    # c7_cols = [f'b_notional_{i}' for i in range(1, levels + 1)]
-    # c8_cols = [f'b_notional_{i}' for i in range(1, levels + 1)]
-    
-    c1 = data.select(c1_cols).to_numpy()
-    channel_list.append(c1)
-
-    c3 = data.select(c3_cols).to_numpy()
-    channel_list.append(c3)
-
-    c5 = data.select(c5_cols).to_numpy()
-    channel_list.append(c5)
-    c6 = data.select(c6_cols).to_numpy()
-    channel_list.append(c6)
-
-
-    ## 原始特征的进入模型
-    X = np.stack(channel_list, axis=1)
+    cols = []
+    for i in range(1,levels+1):
+        cols.append(f'a{i}')
+        cols.append(f'aq{i}')
+        cols.append(f'b{i}')
+        cols.append(f'bq{i}')
+    X = data.select(cols).to_numpy()
     return X
