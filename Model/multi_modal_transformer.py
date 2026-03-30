@@ -8,12 +8,12 @@ import torch.nn as nn
 from typing import Any, Dict, Optional
 import yaml
 
-from layer.lob_encoder import LOBEncoder
-from layer.deeplob_encoder import Deeplob_encoder
-from layer.trade_encoder import TradeEncoder
-from layer.feature_fusion import FeatureFusion
-from layer.transformer import TransformerBackbone
-from layer.revin import RevIN, RevIN2d
+from layers.lob_encoder import LOBEncoder
+from layers.deeplob_encoder import Deeplob_encoder
+from layers.trade_encoder import TradeEncoder
+from layers.feature_fusion import FeatureFusion
+from layers.transformer import TransformerBackbone
+from layers.RevIN import RevIN, RevIN2d
 
 import time
 class MultiModalTransformer(nn.Module):
@@ -47,13 +47,7 @@ class MultiModalTransformer(nn.Module):
         use_revin: bool = True  # 是否使用 RevIN 归一化
     ):
         super().__init__()
-        
-        # 默认配置
-        fusion_config = fusion_config or {'d_model': 128, 'strategy': 'late_concat'}
-        transformer_config = transformer_config or {'d_model': 128, 'nhead': 4, 'num_layers': 3}
-        output_config = output_config or {'num_classes': 3, 'return_regression': True}
-        
-        
+
         encoder_dims = {}
         self.use_revin = use_revin
         self.lob_multi_scale_outputs = None

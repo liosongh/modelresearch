@@ -57,15 +57,16 @@ class MultiModalDataset(Dataset):
             #     tensor = tensor.contiguous()
             # 🔴 提前完成所有维度变换（只做1次，而非每个样本重复做）
             if key == 'lob':
-                tensor = tensor.unsqueeze(1)
+                if tensor.dim()  == 2:
+                    tensor = tensor.unsqueeze(1)
                 # (N, C, L) → (C, N, L) （后续切片直接取T长度）
-                tensor = tensor.permute(1, 0, 2).cuda().contiguous()
+                tensor = tensor.permute(1, 0, 2).contiguous()
             elif key == 'trade':
                 # (N, F) → (F, N)
-                tensor = tensor.transpose(0, 1).cuda().contiguous()
+                tensor = tensor.transpose(0, 1).contiguous()
             else:
                 # (N,) → (1, N)
-                tensor = tensor.unsqueeze(0).cuda().contiguous()
+                tensor = tensor.unsqueeze(0).contiguous()
             self.data[key] = tensor
             self.data_shapes[key] = tensor.shape
             

@@ -176,7 +176,7 @@ class BacktestVisualizer:
             print("  无交易记录，跳过信号-midprice 交互图")
             return
 
-        ASK1_IDX, BID1_IDX = 0, 2
+        ASK1_IDX, BID1_IDX = 0, 1
 
         # 推断时间戳单位：如果值 > 1e12 视为毫秒，否则视为秒
         ts_sample = float(time_bucket[0])
@@ -220,7 +220,7 @@ class BacktestVisualizer:
 
             # midprice 曲线
             ask1 = lob_data[start:end, ASK1_IDX]
-            bid1 = lob_data[start:end, BID1_IDX]
+            bid1 = lob_data[start:end,BID1_IDX]
             mid = (ask1 + bid1) / 2.0
 
             # X 轴：相对秒数
@@ -325,6 +325,7 @@ class BacktestVisualizer:
             self.plot_signal_midprice_detail(
                 result, lob_data, time_bucket,
                 execution_delay=result.config.get('execution_delay', 1),
+                window_seconds = 1800
             )
 
         print("所有图表生成完成")

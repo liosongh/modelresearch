@@ -8,7 +8,7 @@ from typing import Dict, List, Optional, Sequence, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from .base_encoder import BaseEncoder
+from layers.Base_encoder import BaseEncoder
 
 class ChannelLayerNorm2d(nn.Module):
     """
@@ -202,13 +202,13 @@ class ResBlock2D(nn.Module):
             nn.GELU(),
             nn.Dropout2d(dropout) if dropout > 0 else nn.Identity(),
         )
-        # ## 
-        # self.ffn = nn.Sequential(
-        #     ChannelLayerNorm2d(channels),
-        #     nn.GELU(),
-        #     nn.Conv2d(channels, channels, kernel_size=1, bias=True),
-        #     nn.Dropout2d(dropout) if dropout > 0 else nn.Identity(),
-        # )
+        ## 
+        self.ffn = nn.Sequential(
+            ChannelLayerNorm2d(channels),
+            nn.GELU(),
+            nn.Conv2d(channels, channels, kernel_size=1, bias=True),
+            nn.Dropout2d(dropout) if dropout > 0 else nn.Identity(),
+        )
         # self.out_act = nn.GELU()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -221,6 +221,8 @@ class ResBlock2D(nn.Module):
         # residual = x
         ## 档位间的局部特征提取，对每个时间步在 Level 维做卷积，学习档位间局部特征。
         x = self.level_mix(x) ## (B, C, T, L) -> (B, C, T, L)
+        ## 整合信息
+        x = self.ffn(x)
         ## 残差连接
         x = x + residual
         return x
@@ -279,7 +281,7 @@ class ScaleTransition(nn.Module):
             CausalConv2d(
             in_channels,
             out_channels,
-            kernel_size=(time_stride, 1),
+            kernel_size=(time_kernel, 1),
             stride=(time_stride, 1),
             bias=False,
         ),
@@ -303,84 +305,45 @@ class ScaleTransition(nn.Module):
         return x
 
 
-class LevelAggregator(nn.Module):
-    """用注意力聚合 Level 维度，输出 (B, T, d_model)。"""
 
+class LevelAggregator(nn.Module):
     def __init__(self, in_channels: int, d_model: int):
         super().__init__()
         self.d_model = d_model
+        
+        # 将输入映射到 d_model 空间
+        self.feat_proj = nn.Linear(in_channels, d_model)
+        
+        # 定义一个可学习的 Query 向量，用于代表“理想的聚合特征”
+        # 形状为 (1, 1, 1, d_model)
+        self.query = nn.Parameter(torch.randn(1, 1, 1, d_model))
+        
         self.scale = d_model ** -0.5
-        self.query = nn.Linear(in_channels, d_model)
-        self.key = nn.Linear(in_channels, d_model)
-        self.value = nn.Linear(in_channels, d_model)
         self.out_proj = nn.Linear(d_model, d_model)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # x: (B, C, T, L) -> (B, T, L, C)
-        x = x.permute(0, 2, 3, 1)
-        q = self.query(x.mean(dim=2, keepdim=True))  # (B, T, 1, d)
-        k = self.key(x)  # (B, T, L, d)
-        v = self.value(x)  # (B, T, L, d)
-
-        attn = torch.softmax(torch.matmul(q, k.transpose(-1, -2)) * self.scale, dim=-1)
-        out = torch.matmul(attn, v).squeeze(2)  # (B, T, d)
+        B, C, T, L = x.shape
+        x = x.permute(0, 2, 3, 1) 
+        
+        # 映射特征维度
+        feat = self.feat_proj(x)  # (B, T, L, d_model)
+        
+        # 准备 Query: 扩展到每个 Batch 和 Time step
+        # q: (B, T, 1, d_model)
+        q = self.query.expand(B, T, 1, -1)
+        
+        # 计算注意力权重: (B, T, 1, d_model) * (B, T, d_model, L) -> (B, T, 1, L)
+        attn = torch.softmax(
+            torch.matmul(q, feat.transpose(-1, -2)) * self.scale, 
+            dim=-1
+        )
+        
+        # 聚合: (B, T, 1, L) * (B, T, L, d_model) -> (B, T, 1, d_model)
+        out = torch.matmul(attn, feat).squeeze(2)  # (B, T, d_model)
+        
         return self.out_proj(out)
 
-# class LevelAggregator(nn.Module):
-#     """
-#     优化版：注意力聚合空间维度，输出 (B, T, d_model)
-#     修复：静态Query、无残差、无归一化、无位置编码
-#     """
-#     def __init__(self, in_channels: int, d_model: int, max_spatial_len: int = 100):
-#         super().__init__()
-#         self.d_model = d_model
-#         self.scale = d_model ** -0.5
-        
-#         # 1. 标准QKV投影（动态Query，修复静态问题）
-#         self.q_proj = nn.Linear(in_channels, d_model)
-#         self.k_proj = nn.Linear(in_channels, d_model)
-#         self.v_proj = nn.Linear(in_channels, d_model)
-        
-#         # 2. 空间位置编码（可选但强烈推荐，保留空间结构）
-#         self.spatial_pos_emb = nn.Parameter(torch.randn(1, 1, max_spatial_len, d_model))
-        
-#         # 3. 输出层 + 归一化 + 残差
-#         self.out_proj = nn.Linear(d_model, d_model)
-#         self.norm = nn.LayerNorm(d_model)  # 稳定训练
-#         self.dropout = nn.Dropout(0.1)
-
-#     def forward(self, x: torch.Tensor) -> torch.Tensor:
-#         # x: (B, C, T, L) -> (B, T, L, C)
-#         B, C, T, L = x.shape
-#         x = x.permute(0, 2, 3, 1)  # (B, T, L, C)
-        
-#         # 动态QKV（修复静态Query问题）
-#         q = self.q_proj(x)   # (B, T, L, d)  用全特征生成Q
-#         k = self.k_proj(x)   # (B, T, L, d)
-#         v = self.v_proj(x)   # (B, T, L, d)
-        
-#         # 加入空间位置编码
-#         q = q + self.spatial_pos_emb[:, :, :L]
-#         k = k + self.spatial_pos_emb[:, :, :L]
-        
-#         # 注意力：聚合空间维度 L → 1
-#         # 对Q做全局平均，得到时间维度的查询 (B, T, 1, d)
-#         q_global = q.mean(dim=2, keepdim=True)  # 保留你的核心设计，但Q是动态的
-#         attn = torch.softmax(torch.matmul(q_global, k.transpose(-1, -2)) * self.scale, dim=-1)
-#         attn = self.dropout(attn)
-        
-#         # 聚合输出
-#         out = torch.matmul(attn, v).squeeze(2)  # (B, T, d)
-#         out = self.out_proj(out)
-        
-#         # 残差连接 + 归一化（核心优化）
-#         # 残差：输入x在时间维度的均值，匹配维度
-#         residual = x.mean(dim=2)  # (B, T, C) → 若C=d_model可直接用
-#         if C != self.d_model:
-#             residual = nn.Linear(C, self.d_model).to(x.device)(residual)
-#         out = self.norm(out + residual)
-        
-#         return out
 
 
 class LOBEncoder(BaseEncoder):
@@ -395,8 +358,6 @@ class LOBEncoder(BaseEncoder):
         self,
         in_channels: int = 4,
         base_channels: int = 32,
-        pre_group: int = 2,
-        post_group: int = 8,
         time_strides: Optional[List[int]] = None,
         time_kernels: Optional[List[int]] = None,
         level_strides: Optional[List[int]] = None,
@@ -408,72 +369,33 @@ class LOBEncoder(BaseEncoder):
         attn_heads: int = 4,
         return_multi_scale: bool = False,
         scale_output_dim: Optional[int] = None,
+        # revin: bool = False,
     ):
         super().__init__()
 
-        time_strides = time_strides or [5, 2]
-        self._time_strides = [max(1, int(s)) for s in time_strides]
-        if len(self._time_strides) == 0:
-            raise ValueError("time_strides 不能为空。")
-        num_transitions = len(self._time_strides)
-        num_stages = num_transitions + 1
-
-        level_strides = level_strides or [1] * num_transitions
-        level_strides = [max(1, int(s)) for s in level_strides]
-        if len(level_strides) < num_transitions:
-            level_strides = level_strides + [level_strides[-1]] * (num_transitions - len(level_strides))
-        self._level_strides = level_strides[:num_transitions]
-
-        if isinstance(time_kernels, Sequence) and not isinstance(time_kernels, (str, bytes)):
-            self._time_kernels = [int(k) for k in time_kernels]
-            if len(self._time_kernels) < num_transitions:
-                pad_value = self._time_kernels[-1] if self._time_kernels else 3
-                self._time_kernels = self._time_kernels + [pad_value] * (num_transitions - len(self._time_kernels))
-            self._time_kernels = self._time_kernels[:num_transitions]
-        elif isinstance(time_kernels, int):
-            self._time_kernels = [int(time_kernels)] * num_transitions
-        else:
-            # 默认与时间步长一致：例如 5 -> 500ms，2 -> 1000ms
-            self._time_kernels = self._time_strides.copy()
-
-        if isinstance(level_kernels, Sequence) and not isinstance(level_kernels, (str, bytes)):
-            self._level_kernels = [int(k) for k in level_kernels]
-            if len(self._level_kernels) < num_transitions:
-                pad_value = self._level_kernels[-1] if self._level_kernels else 3
-                self._level_kernels = self._level_kernels + [pad_value] * (num_transitions - len(self._level_kernels))
-            self._level_kernels = self._level_kernels[:num_transitions]
-        elif isinstance(level_kernels, int):
-            self._level_kernels = [int(level_kernels)] * num_transitions
-        else:
-            self._level_kernels = [1] * num_transitions
-
- 
-        if stage_channels is None:
-            stage_channels = [base_channels] + [base_channels * 2] * num_transitions
-        stage_channels = [int(c) for c in stage_channels]
-        if len(stage_channels) < num_stages:
-            raise ValueError(f"stage_channels 长度至少为 {num_stages}。")
-        stage_channels = stage_channels[:num_stages]
-
-        if stage_depths is None:
-            stage_depths = [1] * num_stages
-        stage_depths = [int(d) for d in stage_depths]
-        if len(stage_depths) < num_stages:
-            raise ValueError(f"stage_depths 长度至少为 {num_stages}。")
-        stage_depths = stage_depths[:num_stages]
-
+        num_transitions = len(time_strides) ## 降频后的多尺度的层数
+        num_stages = num_transitions + 1  ## 单尺度下的特征提取器层数，加上最开始的尺度
         self.return_multi_scale = return_multi_scale
-        self.scale_output_dim = int(scale_output_dim or base_channels)
+        self._output_dim = int(scale_output_dim or base_channels)
         self._downsample_ratio = 1
-        for stride in self._time_strides:
+        for stride in time_strides:
             self._downsample_ratio *= stride
-        self._output_dim = self.scale_output_dim
+
 
 
         ## 映射通道数
-        # self.input_norm = nn.GroupNorm(2,in_channels) ## 如果之前已经做了归一化的处理，就可以先不归一化
+        # self.input_norm = nn.GroupNorm(in_channels,in_channels) ## 如果之前已经做了归一化的处理，就可以先不归一化
+        ## 对于20level的ask和bid 做一个交互，变为10level
         self.stem = nn.Sequential(
-            nn.Conv2d(in_channels, stage_channels[0], kernel_size=1, bias=False),
+            
+            nn.Conv2d(
+            in_channels,
+            stage_channels[0],
+            kernel_size=(1, 2),
+            stride = (1, 2),
+            # padding=(0,  // 2), ## 保持level维度长度不变
+            bias=False,
+            ),
             ChannelLayerNorm2d(stage_channels[0]),
             nn.GELU(),
             nn.Dropout2d(dropout) if dropout > 0 else nn.Identity(),
@@ -482,6 +404,9 @@ class LOBEncoder(BaseEncoder):
         self.stages = nn.ModuleList()
         self.transitions = nn.ModuleList()
         # self.scale_aggregators = nn.ModuleList()
+
+        ## 第一层的提取
+
 
         for idx in range(num_stages):
             self.stages.append(
@@ -494,10 +419,10 @@ class LOBEncoder(BaseEncoder):
                     dropout=dropout,
                 )
             )
-            if idx == num_stages-1:
+            if idx == num_transitions:
                 self.scale_aggregators = nn.Sequential(
                     ChannelLayerNorm2d(stage_channels[idx]),
-                    LevelAggregator(in_channels=stage_channels[idx], d_model=self.scale_output_dim),
+                    LevelAggregator(in_channels=stage_channels[idx], d_model=self._output_dim),
                     nn.GELU(),
                     nn.Dropout(dropout) if dropout > 0 else nn.Identity(),
                 )
@@ -506,21 +431,21 @@ class LOBEncoder(BaseEncoder):
                     ScaleTransition(
                         in_channels=stage_channels[idx],
                         out_channels=stage_channels[idx + 1],
-                        time_kernel=self._time_kernels[idx],
-                        time_stride=self._time_strides[idx],
-                        level_kernel=self._level_kernels[idx],
-                        level_stride=self._level_strides[idx],
+                        time_kernel=time_kernels[idx],
+                        time_stride=time_strides[idx],
+                        level_kernel=level_kernels[idx],
+                        level_stride=level_strides[idx],
                         dropout=dropout,
                     )
                 )
 
-        # 便于外部读取每个尺度，默认按 100ms 基准累计命名
-        self.scale_names = []
-        cumulative = 1
-        self.scale_names.append(f"{100 * cumulative}ms")
-        for stride in self._time_strides:
-            cumulative *= stride
-            self.scale_names.append(f"{100 * cumulative}ms")
+        # # 便于外部读取每个尺度，默认按 100ms 基准累计命名
+        # self.scale_names = []
+        # cumulative = 1
+        # self.scale_names.append(f"{100 * cumulative}ms")
+        # for stride in time_strides:
+        #     cumulative *= stride
+        #     self.scale_names.append(f"{100 * cumulative}ms")
 
     @property
     def output_dim(self) -> int:
@@ -533,6 +458,7 @@ class LOBEncoder(BaseEncoder):
     def forward(self, x: torch.Tensor) -> Union[torch.Tensor, Dict[str, torch.Tensor]]:
         # x: (B, C, T, L)
         # x = self.input_norm(x)
+
         ## 使用1x1卷积将输入通道数转换为stage_channels[0]
         x = self.stem(x) ## (B, C, T, L) -> (B, stage_channels[0], T, L)
 

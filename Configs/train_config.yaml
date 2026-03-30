@@ -3,33 +3,6 @@
 # Version: v2.0
 # =============================================================================
 
-# # -----------------------------------------------------------------------------
-# # Data Configuration
-# # -----------------------------------------------------------------------------
-data:
-  history_T: 3000          # 历史窗口长度 (100ms * 3000 = 5min)
-  sample_stride: 100        # 训练时的采样步长
-  split_ratio: 0.8       # 训练/验证划分比例
-  
-  # 数据路径配置
-  lob_path: '/root/autodl-tmp/train_data/lob_data.npy'           # LOB数据路径 (运行时指定)
-  trade_path: '/root/autodl-tmp/train_data/trade_data.npy'         # Trade数据路径 (运行时指定)
-  label_path: '/root/autodl-tmp/train_data/trade_labels_ret.npy'         # 标签路径 (运行时指定)
-  
-#   # 标签配置
-#   label_horizon: 3000        # 预测horizon (k步后的收益)
-#   label_smoothing: 0.0     # 标签平滑系数
-
-# # -----------------------------------------------------------------------------
-# # DataLoader Configuration
-# # -----------------------------------------------------------------------------
-# dataloader:
-#   batch_size: 512
-#   num_workers: 4
-#   pin_memory: true
-#   prefetch_factor: 2
-#   persistent_workers: true
-
 # -----------------------------------------------------------------------------
 # Optimizer Configuration
 # -----------------------------------------------------------------------------
@@ -67,7 +40,7 @@ loss:
 # Training Loop Configuration
 # -----------------------------------------------------------------------------
 training:
-  epochs: 3
+  epochs: 10
   use_amp: true            # 混合精度训练
   grad_accumulation_steps: 1
   max_grad_norm: 1.0       # 梯度裁剪

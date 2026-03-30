@@ -192,12 +192,12 @@ class PredictionMetrics:
             DataFrame: [timestamp, equity]
         """
         ask1_idx = 0
-        bid1_idx = 2
+        bid1_idx = 1
 
         start_idx = int(signal_lob_indices[0]) + execution_delay
         end_idx = int(signal_lob_indices[-1]) + execution_delay
 
-        buy_price = lob_data[start_idx, ask1_idx]
+        buy_price = lob_data[start_idx,ask1_idx]
         shares = initial_capital / buy_price
 
         records = []

@@ -31,7 +31,7 @@ class BacktestEngine:
 
     # LOB 列索引
     ASK1_PRICE_IDX = 0
-    BID1_PRICE_IDX = 2
+    BID1_PRICE_IDX = 1
 
     def __init__(self, config: dict):
         bt_cfg = config['backtest']

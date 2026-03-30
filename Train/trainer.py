@@ -434,7 +434,7 @@ class Trainer:
         model_to_save = self.model._orig_mod if hasattr(self.model, '_orig_mod') else self.model
         checkpoint = {
             'epoch': epoch,
-            'model_state_dict': self.model_to_save.state_dict(),
+            'model_state_dict': model_to_save.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
             'metrics': metrics,
         }
