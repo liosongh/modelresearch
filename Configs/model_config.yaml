@@ -2,39 +2,39 @@
 # Model Configuration - Multi-Modal LOB & Trade Architecture
 # Version: v2.0
 # =============================================================================
-model_version: "TCN_multi_modal_model_3"
-description: "1.deeplobencode简单编码,TCN 2.使用的是trade的即时标签进行训练 3.lob数据是1*40,不使用revin 4.感受野128" 
+model_version: "TCN_multi_modal_model_1"
+description: "1.lobencode编码,TCN 2.使用的是trade的即时标签进行训练 3.lob数据是2*20,使用revin 4.感受野128" 
 
 
-# # -----------------------------------------------------------------------------
-# # LOB Encoder Configuration (Causal Downsampling CNN)
-# # -----------------------------------------------------------------------------
-# lob_encoder:
-#   in_channels: 2           # [ask_price, bid_price, ask_vol, bid_vol]
-#   base_channels: 32        # 基础通道数
-#   # pre_group: 2             # 最开始归一化的情况
-#   # post_group: 8            # 最后归一化的情况 
-#   ## scaletransition的参数
-#   time_strides: [5, 4, 3]  # 时间维度降采样步长 (总降频: 2*5*1=10)
-#   time_kernels: [7, 5, 5]  # 时间卷积核大小
-#   level_strides: [1, 1, 1] # Level维度降采样步长
-#   level_kernels: [3, 3, 3] # Level卷积核大小
-#   ## resstage的参数
-#   dropout: 0.2
-#   kernel_sizes:
-#     time: 3  ## 在同一时间尺度下的特征提取
-#     level: 3  ## 在同一时间尺度下的特征提取
-#   stage_depths: [1,1, 1, 1]  ## 每个尺度下的残差块数
-#   stage_channels: [16,16, 16, 16] ## 每个尺度下的通道数
-#   attn_heads: 2  ## 目前没用
-#   return_multi_scale: False
-#   scale_output_dim: 32
+# -----------------------------------------------------------------------------
+# LOB Encoder Configuration (Causal Downsampling CNN)
+# -----------------------------------------------------------------------------
+lob_encoder:
+  in_channels: 2           # [ask_price, bid_price, ask_vol, bid_vol]
+  base_channels: 32        # 基础通道数
+  # pre_group: 2             # 最开始归一化的情况
+  # post_group: 8            # 最后归一化的情况 
+  ## scaletransition的参数
+  time_strides: [5, 4, 3]  # 时间维度降采样步长 (总降频: 2*5*1=10)
+  time_kernels: [7, 5, 5]  # 时间卷积核大小
+  level_strides: [1, 1, 1] # Level维度降采样步长
+  level_kernels: [3, 3, 3] # Level卷积核大小
+  ## resstage的参数
+  dropout: 0.2
+  kernel_sizes:
+    time: 3  ## 在同一时间尺度下的特征提取
+    level: 3  ## 在同一时间尺度下的特征提取
+  stage_depths: [1,1, 1, 1]  ## 每个尺度下的残差块数
+  stage_channels: [16,16, 16, 16] ## 每个尺度下的通道数
+  attn_heads: 2  ## 目前没用
+  return_multi_scale: False
+  scale_output_dim: 32
 
 tcn:
   num_channels: [32,32,32,32,64,64,64,64] ## 第一个是融合后的维度,感受野31
 
 revin:
-  False
+  True
 
 # # # -----------------------------------------------------------------------------
 # # # Trade Encoder Configuration (1D Causal CNN)

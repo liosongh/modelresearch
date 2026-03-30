@@ -178,6 +178,36 @@ class BacktestEngine:
                         'position_after': -1,
                         'capital_after': capital,
                     })
+            ## 如果预测类别为1，则看之前是否有仓位，如果有仓位则根据仓位平仓，如果没仓位则不操作
+            elif pred_class == 1:
+                if position == 1:
+                    close_price = self._apply_cost_sell(bid1)
+                    pnl = shares * (close_price - entry_price)
+                    capital += pnl
+                    trades.append({
+                        'timestamp': exec_timestamp,
+                        'action': 'close_long',
+                    })
+                    position = 0
+                    shares = 0.0
+                elif position == -1:
+                    close_price = self._apply_cost_buy(ask1)
+                    pnl = shares * (entry_price - close_price)
+                    capital += pnl
+                    trades.append({
+                        'timestamp': exec_timestamp,
+                        'action': 'close_short',
+                        'exec_price': close_price,
+                        'shares': shares,
+                        'pnl': pnl,
+                        'position_after': 0,
+                        'capital_after': capital,
+                    })
+                    position = 0
+                    shares = 0.0
+                else:
+                    pass
+
 
             # pred_class == 1 (Stationary) → 不操作
 

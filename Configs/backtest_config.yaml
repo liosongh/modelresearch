@@ -25,5 +25,5 @@ backtest:
   risk_free_rate: 0.0
 
 output:
-  result_dir: "checkpoints/TCN_multi_modal_model_3/Backtest/result"
-  log_dir: "checkpoints/TCN_multi_modal_model_3/Backtest/log"
+  result_dir: "checkpoints/TCN_multi_modal_model_1/Backtest/result"
+  log_dir: "checkpoints/TCN_multi_modal_model_1/Backtest/log"

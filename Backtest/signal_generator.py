@@ -74,38 +74,38 @@ class SignalGenerator:
         lob_data = np.load(data_cfg['lob_path'])
         labels_ret = np.load(data_cfg['label_path'])
         time_bucket = np.load(data_cfg['time_bucket_path'])
-        # ## 原来的数据是 ask price，ask vol，bid price，bid vol
-        # def transform_lob_data(lob_data):
-        #     """
-        #     lob_data: (N, 40) 
-        #     排列: [ap1, av1, bp1, bv1, ap2, av2, bp2, bv2, ..., ap10, av10, bp10, bv10]
-        #     返回: (N, 2, 20) -> Channel 0: Price (bid10...bid1, ask1...ask10), Channel 1: Volume
-        #     """
-        #     # 如果是 numpy 则转为 tensor 处理更方便（或者直接用 numpy 索引）
-        #     if isinstance(lob_data, np.ndarray):
-        #         lob_data = torch.from_numpy(lob_data)
+        ## 原来的数据是 ask price，ask vol，bid price，bid vol
+        def transform_lob_data(lob_data):
+            """
+            lob_data: (N, 40) 
+            排列: [ap1, av1, bp1, bv1, ap2, av2, bp2, bv2, ..., ap10, av10, bp10, bv10]
+            返回: (N, 2, 20) -> Channel 0: Price (bid10...bid1, ask1...ask10), Channel 1: Volume
+            """
+            # 如果是 numpy 则转为 tensor 处理更方便（或者直接用 numpy 索引）
+            if isinstance(lob_data, np.ndarray):
+                lob_data = torch.from_numpy(lob_data)
             
-        #     N = lob_data.shape[0]
+            N = lob_data.shape[0]
             
-        #     # 1. 提取所有的 Ask 和 Bid
-        #     # 原始索引中：0, 4, 8... 是 ask_p; 1, 5, 9... 是 ask_v
-        #     #            2, 6, 10... 是 bid_p; 3, 7, 11... 是 bid_v
-        #     ask_p = lob_data[:, 0::2]  # (N, 10) [ap1, ap2, ..., ap10]
-        #     ask_v = lob_data[:, 1::2]  # (N, 10)
-        #     # bid_p = lob_data[:, 2::4]  # (N, 10) [bp1, bp2, ..., bp10]
-        #     # bid_v = lob_data[:, 3::4]  # (N, 10)
+            # 1. 提取所有的 Ask 和 Bid
+            # 原始索引中：0, 4, 8... 是 ask_p; 1, 5, 9... 是 ask_v
+            #            2, 6, 10... 是 bid_p; 3, 7, 11... 是 bid_v
+            ask_p = lob_data[:, 0::2]  # (N, 10) [ap1, ap2, ..., ap10]
+            ask_v = lob_data[:, 1::2]  # (N, 10)
+            # bid_p = lob_data[:, 2::4]  # (N, 10) [bp1, bp2, ..., bp10]
+            # bid_v = lob_data[:, 3::4]  # (N, 10)
 
-        #     # # 2. 按照 [bid10...bid1, ask1...ask10] 顺序重排
-        #     # # flip(1) 将 [p1, p2...p10] 变为 [p10, p9...p1]
-        #     # price_channel = torch.cat([bid_p.flip(dims=[1]), ask_p], dim=1)  # (N, 20)
-        #     # vol_channel = torch.cat([bid_v.flip(dims=[1]), ask_v], dim=1)    # (N, 20)
+            # # 2. 按照 [bid10...bid1, ask1...ask10] 顺序重排
+            # # flip(1) 将 [p1, p2...p10] 变为 [p10, p9...p1]
+            # price_channel = torch.cat([bid_p.flip(dims=[1]), ask_p], dim=1)  # (N, 20)
+            # vol_channel = torch.cat([bid_v.flip(dims=[1]), ask_v], dim=1)    # (N, 20)
 
-        #     # 3. 堆叠成 (N, 2, 20)
-        #     output = torch.stack([ask_p, ask_v], dim=1)
+            # 3. 堆叠成 (N, 2, 20)
+            output = torch.stack([ask_p, ask_v], dim=1)
             
-        #     return output
-        # lob_data = transform_lob_data(lob_data)
-        lob_data = lob_data
+            return output
+        lob_data = transform_lob_data(lob_data)
+        # lob_data = lob_data
 
         print(f"数据加载完成:")
         print(f"  LOB: {lob_data.shape}, Labels: {labels_ret.shape}, TimeBucket: {time_bucket.shape}")
@@ -187,6 +187,7 @@ class SignalGenerator:
         """
         model = self.load_model(model_version,model)
         lob_data, labels_ret, time_bucket = self.load_data()
+
         signals = self.generate_signals(model, lob_data, time_bucket)
 
         lob_data = np.asarray(lob_data)

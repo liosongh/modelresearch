@@ -10,6 +10,23 @@ import torch.nn as nn
 import torch.nn.functional as F
 from layers.Base_encoder import BaseEncoder
 
+# class ChannelLayerNorm2d(nn.Module):
+#     """
+#     对每个 (t, l) 位置仅在通道维做 LayerNorm，避免跨时间统计泄漏。
+#     """
+
+#     def __init__(self, channels: int, eps: float = 1e-5):
+#         super().__init__()
+#         self.eps = eps
+#         self.weight = nn.Parameter(torch.ones(channels))
+#         self.bias = nn.Parameter(torch.zeros(channels))
+
+#     def forward(self, x: torch.Tensor) -> torch.Tensor:
+#         x = x.permute(0, 2, 3, 1)  # (B, T, L, C)
+#         x = F.layer_norm(x, (x.shape[-1],), self.weight, self.bias, self.eps)
+#         return x.permute(0, 3, 1, 2).contiguous()
+
+
 class ChannelLayerNorm2d(nn.Module):
     """
     对每个 (t, l) 位置仅在通道维做 LayerNorm，避免跨时间统计泄漏。
@@ -25,6 +42,7 @@ class ChannelLayerNorm2d(nn.Module):
         x = x.permute(0, 2, 3, 1)  # (B, T, L, C)
         x = F.layer_norm(x, (x.shape[-1],), self.weight, self.bias, self.eps)
         return x.permute(0, 3, 1, 2).contiguous()
+
 
 
 class CausalConv2d(nn.Module):
@@ -58,7 +76,8 @@ class CausalConv2d(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # F.pad for 2D: (L_left, L_right, T_top, T_bottom)
-        x = F.pad(x, (self.level_pad, self.level_pad, self.time_pad, 0))
+        ## 改为replication pad2d
+        x = F.pad(x, (self.level_pad, self.level_pad, self.time_pad, 0), mode='replicate')
         return self.conv(x)
 
 
@@ -177,6 +196,8 @@ class ResBlock2D(nn.Module):
         # )
         ## 时间序列的局部特征提取，对时间维度做卷积，学习时间维度上的关系。 (B, C, T, L) -> (B, C, T, L)
         self.temporal = nn.Sequential(
+            ## 保持时序维度长度不变
+            # nn.ReplicationPad2d((0, 0, 0, 1)),
             ChannelLayerNorm2d(channels),
             CausalConv2d(
             channels,

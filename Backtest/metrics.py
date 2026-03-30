@@ -199,6 +199,8 @@ class PredictionMetrics:
 
         buy_price = lob_data[start_idx,ask1_idx]
         shares = initial_capital / buy_price
+        # print('buy_price: ', buy_price)
+        # print('shares: ', shares)
 
         records = []
         for lob_idx in signal_lob_indices.astype(int) + execution_delay:
@@ -206,6 +208,9 @@ class PredictionMetrics:
                 break
             mid = (lob_data[lob_idx, ask1_idx] + lob_data[lob_idx, bid1_idx]) / 2.0
             equity = shares * mid
+            # if lob_idx < signal_lob_indices[1]:
+
+            #     print('equity: ', equity)
             records.append({
                 'timestamp': time_bucket[lob_idx],
                 'equity': equity,
@@ -240,7 +245,7 @@ class PredictionMetrics:
         if not benchmark.empty:
             bm_initial = benchmark['equity'].iloc[0]
             bm_final = benchmark['equity'].iloc[-1]
-            benchmark_return = float((bm_final / bm_initial) - 1)
+            benchmark_return = benchmark_return = float( ((bm_final / bm_initial) - 1).item() )
         else:
             benchmark_return = 0.0
 
