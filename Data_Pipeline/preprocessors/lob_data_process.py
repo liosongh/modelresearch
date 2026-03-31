@@ -4,10 +4,58 @@
 import os
 import polars as pl
 import numpy as np
-from Data_Pipeline.load import load_lob_data
+
+
+def load_lob_data(data_dir,days = None,date = None,levels = 10):
+    """读取parquet数据文件,并把事件戳转换为固定整数的100ms时间戳"""
+    if date is None:
+
+        date = ['2025-11-25','2025-11-26','2025-11-27','2025-11-28','2025-11-29','2025-11-30','2025-12-01',
+                '2025-12-02','2025-12-03','2025-12-04','2025-12-05','2025-12-06','2025-12-07','2025-12-08','2025-12-09','2025-12-10',
+        ]
+    if days is not None:
+        date = date[:days]
+    all_dfs = []
+    select_cols = [f'a{i}' for i in range(1, levels + 1)]
+    select_cols += [f'aq{i}' for i in range(1, levels + 1)]
+    select_cols += [f'b{i}' for i in range(1, levels + 1)]
+    select_cols += [f'bq{i}' for i in range(1, levels + 1)]
+
+    select_cols += ['timestamp']
+    
+    for i in date:
+        parquet_filename = f'{i}_ETHUSDT_ob_20levels.parquet'
+        output_path = os.path.join(data_dir, parquet_filename)
+        if os.path.exists(output_path):
+            df = pl.read_parquet(output_path)
+            df = df.select(
+                select_cols
+            )
+            # df = df.with_columns(
+            #     pl.col(pl.Datetime).dt.replace_time_zone(None)
+            # )
+            all_dfs.append(df)
+        else:
+            print(f"文件不存在: {output_path}")
+            continue
+
+    df_all = pl.concat(all_dfs, how='vertical')
+    df_all = df_all.sort('timestamp', descending=False)
+    # df_all = df_all.with_columns(
+    #     pl.from_epoch("timestamp",time_unit="ms").alias("datetime")
+    # )
+    ### 时间戳对齐处理
+    window_ms = 100
+    df_all = df_all.with_columns(
+        ((pl.col('timestamp') // window_ms - (pl.col('timestamp') % window_ms <50)+1) * window_ms).alias('time_bucket')
+    )
+    # df_all = df_all.sort('timestamp', descending=False)
+    df_all = df_all.unique(subset=['time_bucket'],keep='last',maintain_order=True)
+    return df_all
+
 
 ## 加载原始数据
-def process_lob_data(data_dir: str,date: list[str],levels: int = 10) -> pl.DataFrame:
+def fullfill_lob_data(lob_data: pl.DataFrame,date: list[str],levels: int = 10) -> pl.DataFrame:
     # date = ['2025-11-04','2025-11-05','2025-11-06','2025-11-07','2025-11-08','2025-11-09','2025-11-10',
     #         '2025-11-11','2025-11-12','2025-11-13','2025-11-14','2025-11-15','2025-11-16','2025-11-17',
     #         '2025-11-18','2025-11-19','2025-11-20','2025-11-21','2025-11-22','2025-11-23','2025-11-24',
@@ -15,7 +63,7 @@ def process_lob_data(data_dir: str,date: list[str],levels: int = 10) -> pl.DataF
     #         '2025-12-02','2025-12-03','2025-12-04','2025-12-05','2025-12-06','2025-12-07',
     #         ]
 
-    lob_data = load_lob_data(data_dir,date=date,levels=levels)
+    # lob_data = load_lob_data(data_dir,date=date,levels=levels)
     ## 添加has_lob列，表示是否存在LOB数据
     lob_data = lob_data.with_columns(
         pl.lit(1).alias('has_lob')
@@ -78,3 +126,6 @@ def generate_channel_data(data: pl.DataFrame,levels = 10) -> pl.DataFrame:
         cols.append(f'bq{i}')
     X = data.select(cols).to_numpy()
     return X
+
+
+
