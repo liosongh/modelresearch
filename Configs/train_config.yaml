@@ -26,15 +26,11 @@ scheduler:
 # Loss Configuration
 # -----------------------------------------------------------------------------
 loss:
-  classification:
-    type: "FocalLoss"
-    alpha: 1.0
-    gamma: 2.0
-    class_weights: null    # 可选: [1.0, 0.5, 1.0] 针对不平衡
-  regression:
-    type: "HuberLoss"
+  loss_name: "mutilmask_loss"
+  params:
+    task_weights: [1.0, 1.0, 1.0, 1.0, 1.0]
     delta: 1.0
-  loss_weight: 1.0      # 分类损失权重 (回归权重 = 1 - loss_weight)
+
 
 # -----------------------------------------------------------------------------
 # Training Loop Configuration
@@ -59,7 +55,7 @@ training:
     profile_warmup_steps: 20
     profile_max_steps: 500
     tag: "default"
-    # compare_to_tag: null
+    compare_to_tag: null
   
   # # Checkpointing
   # checkpoint:
@@ -67,13 +63,13 @@ training:
   #   save_top_k: 3
   #   save_last: true
 
-output:
-  checkpoint_dir: "./checkpoints/"
-  log_dir: "/root/tf-logs/"
-  log_interval: 10
-  use_tensorboard: true
-  use_wandb: false
-  wandb_project: "LOB_MultiModal"
+  output:
+    checkpoint_dir: "./checkpoints/"
+    log_dir: "/root/tf-logs/"
+    log_interval: 10
+    use_tensorboard: False
+    use_wandb: False
+    wandb_project: "LOB_MultiModal"
 
 # # -----------------------------------------------------------------------------
 # # Logging Configuration

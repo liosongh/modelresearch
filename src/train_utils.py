@@ -3,8 +3,6 @@
 # Version: v2.0
 # =============================================================================
 
-import torch
-import torch.nn as nn
 from torch.optim import Adam, AdamW, SGD
 from torch.optim.lr_scheduler import (
     CosineAnnealingWarmRestarts,
@@ -14,10 +12,12 @@ from torch.optim.lr_scheduler import (
 )
 from typing import Dict, Optional, Any
 import numpy as np
-
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 import sys
 sys.path.append('..')
-from Utils.losses import FocalLoss, DualLoss
+from losses import FocalLoss, DualLoss, MultiTaskReturnLoss
 
 
 def setup_optimizer(model: nn.Module, config: Dict) -> torch.optim.Optimizer:
@@ -121,53 +121,22 @@ def setup_scheduler(
     return scheduler
 
 
-def setup_loss_functions(config: Dict, device: str = 'cuda') -> DualLoss:
+def setup_loss_functions(config: Dict) -> DualLoss:
     """
     根据配置创建损失函数。
     
     Args:
         config: 损失函数配置
-        device: 设备
         
     Returns:
         loss_fn: DualLoss 实例
     """
-    cls_config = config.get('classification', {})
-    reg_config = config.get('regression', {})
-    loss_weight = config.get('loss_weight', 0.8)
-    
-    # 分类损失
-    cls_type = cls_config.get('type', 'FocalLoss')
-    if cls_type == 'FocalLoss':
-        class_weights = cls_config.get('class_weights')
-        if class_weights is not None:
-            class_weights = torch.tensor(class_weights, dtype=torch.float32, device=device)
-        cls_loss_fn = FocalLoss(
-            alpha=cls_config.get('alpha', 1.0),
-            gamma=cls_config.get('gamma', 2.0),
-            class_weights=class_weights
-        )
-    elif cls_type == 'CrossEntropy':
-        cls_loss_fn = nn.CrossEntropyLoss()
+    loss_name = config.get('loss_name', 'mutilmask_loss')
+    if loss_name == 'mutilmask_loss':
+        return MultiTaskReturnLoss(**config['params'])
     else:
-        cls_loss_fn = FocalLoss()
-        
-    # 回归损失
-    reg_type = reg_config.get('type', 'HuberLoss')
-    if reg_type == 'HuberLoss':
-        reg_loss_fn = nn.HuberLoss(delta=reg_config.get('delta', 1.0))
-    elif reg_type == 'MSELoss':
-        reg_loss_fn = nn.MSELoss()
-    elif reg_type == 'SmoothL1Loss':
-        reg_loss_fn = nn.SmoothL1Loss()
-    else:
-        reg_loss_fn = nn.HuberLoss()
-        
-    return DualLoss(
-        cls_loss_fn=cls_loss_fn,
-        reg_loss_fn=reg_loss_fn,
-        alpha=loss_weight
-    )
+        raise ValueError(f"Unknown loss name: {loss_name}")
+
 
 
 class EarlyStopping:
@@ -224,6 +193,7 @@ class EarlyStopping:
             improved = score < self.best_score - self.min_delta
             
         if improved:
+            # 保存
             self.best_score = score
             self.counter = 0
             if self.restore_best:

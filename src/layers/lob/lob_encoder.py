@@ -377,7 +377,7 @@ class LOBEncoder(BaseEncoder):
 
     def __init__(
         self,
-        in_channels: int = 4,
+        in_channels: int = 2,
         base_channels: int = 32,
         time_strides: Optional[List[int]] = None,
         time_kernels: Optional[List[int]] = None,
@@ -389,7 +389,7 @@ class LOBEncoder(BaseEncoder):
         stage_channels: Optional[List[int]] = None,
         attn_heads: int = 4,
         return_multi_scale: bool = False,
-        scale_output_dim: Optional[int] = None,
+        output_dim: Optional[int] = None,
         # revin: bool = False,
     ):
         super().__init__()
@@ -397,7 +397,7 @@ class LOBEncoder(BaseEncoder):
         num_transitions = len(time_strides) ## 降频后的多尺度的层数
         num_stages = num_transitions + 1  ## 单尺度下的特征提取器层数，加上最开始的尺度
         self.return_multi_scale = return_multi_scale
-        self._output_dim = int(scale_output_dim or base_channels)
+        self._output_dim = int(output_dim or base_channels)
         self._downsample_ratio = 1
         for stride in time_strides:
             self._downsample_ratio *= stride
@@ -491,8 +491,8 @@ class LOBEncoder(BaseEncoder):
         for idx, transition in enumerate(self.transitions):
             x = transition(x) ## (B, stage_channels[idx], T, L) -> (B, stage_channels[idx + 1], T, L)
             x = self.stages[idx + 1](x) ## (B, stage_channels[idx + 1], T, L) -> (B, stage_channels[idx + 1], T_ds, L)
-            # scale_features.append(self.scale_aggregators[idx + 1](x)) ## (B, stage_channels[idx + 1], T_ds, L) -> (B, scale_output_dim, T_ds, L)
-        final_feature = self.scale_aggregators(x)
+            # scale_features.append(self.scale_aggregators[idx + 1](x)) ## (B, stage_channels[idx + 1], T_ds, L) -> (B, output_dim, T_ds, L)
+        final_feature = self.scale_aggregators(x) # (B, T, d_model)
         # final_feature = scale_features[-1]
         # if self.return_multi_scale:
         #     scale_dict = {name: feat for name, feat in zip(self.scale_names, scale_features)}

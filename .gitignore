@@ -6,9 +6,9 @@ weights/
 *.ckpt
 
 # 数据集
-data/
-datasets/
-raw_data/
+# data/
+# datasets/
+# raw_data/
 
 # 训练日志
 logs/

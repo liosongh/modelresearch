@@ -9,13 +9,20 @@ experiment:
   description: "多模态LOB-Trade融合模型消融实验"
   version: "v2.0"
 
+## 预处理过后的数据集
+data_dir_dict:
+  lob: '/root/autodl-tmp/train_data/lob_data_100ms.parquet'
+  trade: '/root/autodl-tmp/train_data/trade_data_100ms.parquet'
+labels_dir: '/root/autodl-tmp/train_data/labels_100ms.parquet'
 # =============================================================================
 # 数据配置 (所有实验统一)
 # =============================================================================
 data:
   history_T: 6000         # 历史窗口 (100ms * 3000 = 5min)
   sample_stride: 100        # 采样步长 (减少样本重叠)
-  split_ratio: 0.8         # 训练/验证划分比例
+  # start_idx: 0             # 起始索引
+  # end_idx: 10000           # 结束索引
+  # split_ratio: 0.8         # 训练/验证划分比例
   num_levels: 10           # LOB档位数
 
 # =============================================================================
@@ -27,6 +34,5 @@ dataloader:
   prefetch_factor: 4
   pin_memory: True
   drop_last: true
-  device: "cuda"
 
 

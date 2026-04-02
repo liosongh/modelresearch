@@ -436,3 +436,64 @@ class MultiModalTrainingLoss(nn.Module):
         losses['total'] = total_loss
         
         return losses
+
+
+
+class MultiTaskReturnLoss(nn.Module):
+    """
+    多任务return预测损失函数（5个时间窗口：10/30/60/300/600s）
+    鲁棒Huber损失 + 自定义任务权重
+    """
+    def __init__(
+        self,
+        # loss_name: str = "mutilmask_loss",
+        task_weights: list = None,  # 5个任务的权重，默认等权
+        delta: float = 1.0          # Huber损失阈值，推荐1.0
+    ):
+        super().__init__()
+        # 默认等权重：5个任务同等重要
+
+        self.task_weights = torch.tensor(task_weights) if task_weights else torch.ones(5)
+        self.delta = delta
+
+    def forward(self, pred: torch.Tensor, labels: torch.Tensor) -> torch.Tensor:
+        """
+        :param pred: 模型输出 [B, 5]
+        :param labels: 真实标签 [B, 5]
+        :return: 标量总损失
+        """
+        # 校验维度
+        assert pred.shape == labels.shape, f"预测值{pred.shape}和标签{labels.shape}维度不匹配"
+        # assert pred.size(-1) == 5, "必须输出5个任务的预测结果"
+
+        # 1. 把权重放到和数据相同的设备（GPU/CPU）
+        weights = self.task_weights.to(pred.device)
+
+        # 2. 计算【每个任务】的Huber损失 (B,5)
+        huber_loss = F.huber_loss(pred, labels, reduction="none", delta=self.delta)
+
+        # 3. 按样本平均 → (5,) → 加权求和 → 总损失
+        per_task_loss = huber_loss.mean(dim=0)  # 每个任务的平均损失
+        total_loss = (per_task_loss * weights).sum() / weights.sum()  # 加权平均
+
+        return total_loss
+
+class AdaptiveMultiTaskLoss(nn.Module):
+    """基于不确定性的自适应多任务损失（自动加权）"""
+    def __init__(self, num_tasks: int = 5):
+        super().__init__()
+        self.num_tasks = num_tasks
+        # 可学习的 log方差，用于自适应权重
+        self.log_vars = nn.Parameter(torch.zeros(num_tasks))
+
+    def forward(self, pred, labels):
+        assert pred.shape == labels.shape and pred.size(-1) == 5
+        losses = F.huber_loss(pred, labels, reduction="none", delta=1.0).mean(dim=0)  # (5,)
+        
+        # 自适应权重公式
+        total_loss = 0
+        for i in range(self.num_tasks):
+            precision = torch.exp(-self.log_vars[i])
+            total_loss += precision * losses[i] + self.log_vars[i]
+        
+        return total_loss / self.num_tasks
