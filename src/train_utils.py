@@ -17,7 +17,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import sys
 sys.path.append('..')
-from losses import FocalLoss, DualLoss, MultiTaskReturnLoss
+from src.losses import  DualLoss, MultiTaskReturnLoss
 
 
 def setup_optimizer(model: nn.Module, config: Dict) -> torch.optim.Optimizer:

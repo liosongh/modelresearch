@@ -470,10 +470,12 @@ class MultiTaskReturnLoss(nn.Module):
         weights = self.task_weights.to(pred.device)
 
         # 2. 计算【每个任务】的Huber损失 (B,5)
-        huber_loss = F.huber_loss(pred, labels, reduction="none", delta=self.delta)
+        # loss = F.huber_loss(pred, labels, reduction="none", delta=self.delta)
+        loss = F.mse_loss(pred, labels, reduction="none")
+
 
         # 3. 按样本平均 → (5,) → 加权求和 → 总损失
-        per_task_loss = huber_loss.mean(dim=0)  # 每个任务的平均损失
+        per_task_loss = loss.mean(dim=0)  # 每个任务的平均损失
         total_loss = (per_task_loss * weights).sum() / weights.sum()  # 加权平均
 
         return total_loss

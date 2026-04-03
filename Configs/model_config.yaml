@@ -2,8 +2,8 @@
 # Model Configuration - Multi-Modal LOB & Trade Architecture
 # Version: v2.0
 # =============================================================================
-model_version: "TCN_multi_modal_model_1"
-description: "1.lobencode编码,TCN 2.lob数据是2*20,使用revin 4.感受野128" 
+model_version: "TCN_multi_modal_model_5"
+description: "1.level_wise_encoder 编码,TCN 2.lob数据是2*20,使用revin 4.感受野128" 
 
 ## 是否对数据进行归一化
 revin:
@@ -13,72 +13,88 @@ revin:
 # LOB Encoder Configuration (Causal Downsampling CNN)
 # -----------------------------------------------------------------------------
 lob_encoder:
-  encoder_name: "lob_encoder"
+  encoder_name: "level_wise_encoder"
   params:
-    in_channels: 2           # [ask_price, bid_price, ask_vol, bid_vol]
-    base_channels: 16        # 基础通道数
-    # pre_group: 2             # 最开始归一化的情况
-    # post_group: 8            # 最后归一化的情况 
-    ## scaletransition的参数
-    time_strides: [5, 4, 3]  # 时间维度降采样步长 (总降频: 2*5*1=10)
-    time_kernels: [7, 5, 5]  # 时间卷积核大小
-    level_strides: [1, 1, 1] # Level维度降采样步长
-    level_kernels: [3, 3, 3] # Level卷积核大小
-    ## resstage的参数
-    dropout: 0.2
-    kernel_sizes:
-      time: 3  ## 在同一时间尺度下的特征提取
-      level: 3  ## 在同一时间尺度下的特征提取
-    stage_depths: [1,1, 1, 1]  ## 每个尺度下的残差块数
-    stage_channels: [16,16, 16, 16] ## 每个尺度下的通道数
-    attn_heads: 2  ## 目前没用
-    return_multi_scale: False
-    output_dim: 32
+    # ## lob_encoder 参数
+    # in_channels: 2           # [ask_price, bid_price, ask_vol, bid_vol]
+    # base_channels: 16        # 基础通道数
+    # # pre_group: 2             # 最开始归一化的情况
+    # # post_group: 8            # 最后归一化的情况 
+    # ## scaletransition的参数
+    # time_strides: [5, 4, 3]  # 时间维度降采样步长 (总降频: 2*5*1=10)
+    # time_kernels: [7, 5, 5]  # 时间卷积核大小
+    # level_strides: [1, 1, 1] # Level维度降采样步长
+    # level_kernels: [3, 3, 3] # Level卷积核大小
+    # ## resstage的参数
+    # dropout: 0.2
+    # kernel_sizes:
+    #   time: 3  ## 在同一时间尺度下的特征提取
+    #   level: 3  ## 在同一时间尺度下的特征提取
+    # stage_depths: [1,1, 1, 1]  ## 每个尺度下的残差块数
+    # stage_channels: [16,16, 16, 16] ## 每个尺度下的通道数
+    # attn_heads: 2  ## 目前没用
+    # return_multi_scale: False
+    # output_dim: 16
+
+    # ## Deeplob_encoder_simple 参数
+    # in_channels : 1
+    # d_model : 16
+    # output_dim : 16
+    # dropout : 0.2
+
+    ## level_wise_encoder 参数
+    in_channels : 5
+    d_model : 16
+    output_dim : 16
+    n_heads : 2
+    max_L : 20
+
+
 
 time_module:
   module_name: "tcn"
   params:
     ## TCN的参数
-    num_channels: [32,32,32,32,64,64,64,64] ## 第一个是融合后的维度,感受野31
+    num_channels: [16,16,16,16,16,16,16,16] ## 第一个是融合后的维度,感受野31
 
-    # PatchTST_backbone 初始化参数（含默认值）
-    # 必须写进 config 的所有参数
-    enc_in: 2  ## 输入的通道数
-    seq_len: 6000  ## 输入的序列长度
-    pred_len: 1  ## 预测的序列长度
-    e_layers: 3  ## 编码器的层数
-    n_heads: 16  ## 注意力头的数量
-    d_model: 128  ## 模型的维度
-    d_ff: 256  ## 前馈神经网络的维度
-    dropout: 0.0
-    fc_dropout: 0.0  ## 前馈神经网络的dropout率
-    head_dropout: 0  ## 头部的dropout率 
-    individual: False  ## 是否使用独立的头
-    patch_len: 16  ## 每个patch的长度
-    stride: 8  ## 每个patch的步长
-    padding_patch: null  ## 是否使用padding
-    revin: True  ## 是否使用revin
-    affine: True  ## 是否使用affine
-    subtract_last: False  ## 是否使用subtract_last
-    decomposition: False  ## 是否使用decomposition
-    kernel_size: 25  ## moving_avg的卷积核的大小
+    # # PatchTST_backbone 初始化参数（含默认值）
+    # # 必须写进 config 的所有参数
+    # enc_in: 2  ## 输入的通道数
+    # seq_len: 6000  ## 输入的序列长度
+    # pred_len: 1  ## 预测的序列长度
+    # e_layers: 3  ## 编码器的层数
+    # n_heads: 16  ## 注意力头的数量
+    # d_model: 128  ## 模型的维度
+    # d_ff: 256  ## 前馈神经网络的维度
+    # dropout: 0.0
+    # fc_dropout: 0.0  ## 前馈神经网络的dropout率
+    # head_dropout: 0  ## 头部的dropout率 
+    # individual: False  ## 是否使用独立的头
+    # patch_len: 16  ## 每个patch的长度
+    # stride: 8  ## 每个patch的步长
+    # padding_patch: null  ## 是否使用padding
+    # revin: True  ## 是否使用revin
+    # affine: True  ## 是否使用affine
+    # subtract_last: False  ## 是否使用subtract_last
+    # decomposition: False  ## 是否使用decomposition
+    # kernel_size: 25  ## moving_avg的卷积核的大小
 
-    # 可选默认参数（可不写，自动用默认）
-    max_seq_len: 1024  ## 最大序列长度,好像没有用到
-    d_k: null  ## 键的维度，自动计算
-    d_v: null  ## 值的维度，自动计算
-    norm: BatchNorm  ## 归一化层
-    attn_dropout: 0.0  ## 注意力层的dropout率
-    act: gelu  ## 激活函数
-    key_padding_mask: auto  ## 是否使用key_padding_mask
-    res_attention: True  ## 是否使用res_attention
-    pre_norm: False  ## 是否使用pre_norm
-    store_attn: False  ## 是否使用store_attn
-    pe: zeros  ## 位置编码
-    learn_pe: True  ## 是否使用learn_pe
-    pretrain_head: False  ## 是否使用pretrain_head
-    head_type: flatten  ## 头部的类型
-    verbose: False  ## 是否使用verbose,没有用到
+    # # 可选默认参数（可不写，自动用默认）
+    # max_seq_len: 1024  ## 最大序列长度,好像没有用到
+    # d_k: null  ## 键的维度，自动计算
+    # d_v: null  ## 值的维度，自动计算
+    # norm: BatchNorm  ## 归一化层
+    # attn_dropout: 0.0  ## 注意力层的dropout率
+    # act: gelu  ## 激活函数
+    # key_padding_mask: auto  ## 是否使用key_padding_mask
+    # res_attention: True  ## 是否使用res_attention
+    # pre_norm: False  ## 是否使用pre_norm
+    # store_attn: False  ## 是否使用store_attn
+    # pe: zeros  ## 位置编码
+    # learn_pe: True  ## 是否使用learn_pe
+    # pretrain_head: False  ## 是否使用pretrain_head
+    # head_type: flatten  ## 头部的类型
+    # verbose: False  ## 是否使用verbose,没有用到
 
 # # # -----------------------------------------------------------------------------
 # # # Trade Encoder Configuration (1D Causal CNN)

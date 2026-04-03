@@ -135,10 +135,10 @@ def level_wise_encoder_transform(lob_data):
     # 4. 计算 OFI
     ofi = compute_ofi(price_channel, vol_channel)
 
-    # 3. 堆叠成 (N, 4, 20)
+    # 3. 堆叠成 (N, 5, 20)
     output = np.stack(
         [price_channel, vol_channel, price_diff, rel_price, ofi],
-        axis=-1
+        axis=1
     )
 
     ## 转为num
@@ -196,7 +196,7 @@ def transform_lob_data(lob_data,lob_encoder_name,levels = 10):
         return level_wise_encoder_transform(lob_data)
     elif lob_encoder_name == 'lob_encoder':
         return lob_encoder_transform(lob_data)
-    elif lob_encoder_name == 'deeplob_encoder':
+    elif lob_encoder_name == 'Deeplob_encoder_simple' or lob_encoder_name == 'DeepLOB_encoder':
         return deeplob_encoder_transform(lob_data)
     else:
         raise ValueError(f"Invalid model name: {lob_encoder_name}")

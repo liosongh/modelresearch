@@ -8,7 +8,7 @@ from typing import Dict, List, Optional, Sequence, Union
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from layers.Base_encoder import BaseEncoder
+# from layers.Base_encoder import BaseEncoder
 
 # class ChannelLayerNorm2d(nn.Module):
 #     """
@@ -367,7 +367,7 @@ class LevelAggregator(nn.Module):
 
 
 
-class LOBEncoder(BaseEncoder):
+class LOBEncoder(nn.Module):
     """
     多尺度 LOB 编码器：
     - Stage100ms: LevelAttention + ResStage

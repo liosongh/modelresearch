@@ -73,19 +73,19 @@ class Deeplob_encoder(nn.Module):
         self.fc_fusion = nn.Sequential(
             nn.Linear(d_model * 2 * 3, d_model * 2),
             nn.LeakyReLU(negative_slope=0.01),
-            nn.BatchNorm1d(d_model * 2),
+            nn.LayerNorm(d_model * 2),
             nn.Dropout(dropout),
             nn.Linear(d_model * 2, output_dim),
             nn.LeakyReLU(negative_slope=0.01),
-            nn.BatchNorm1d(output_dim),
+            nn.LayerNorm(output_dim),
             nn.Dropout(dropout),
         )
         # # lstm layers
         # self.lstm = nn.LSTM(input_size=192, hidden_size=64, num_layers=1, batch_first=True)
         # self.fc1 = nn.Linear(64, self.y_len)
-    @property
-    def output_dim(self) -> int:
-        return 64*3
+    # @property
+    # def output_dim(self) -> int:
+    #     return 64*3
     def forward(self, x):
 
     
@@ -177,20 +177,20 @@ class Deeplob_encoder_simple(nn.Module):
         self.fc_fusion = nn.Sequential(
             nn.Linear(d_model * 2 * 3, d_model * 2),
             nn.LeakyReLU(negative_slope=0.01),
-            nn.BatchNorm1d(d_model * 2),
+            nn.LayerNorm(d_model * 2),
             nn.Dropout(dropout),
             nn.Linear(d_model * 2, output_dim),
             nn.LeakyReLU(negative_slope=0.01),
-            nn.BatchNorm1d(output_dim),
+            nn.LayerNorm(output_dim),
             nn.Dropout(dropout),
         )
         
         # # lstm layers
         # self.lstm = nn.LSTM(input_size=192, hidden_size=64, num_layers=1, batch_first=True)
         # self.fc1 = nn.Linear(64, self.y_len)
-    @property
-    def output_dim(self) -> int:
-        return 64*3
+    # @property
+    # def output_dim(self) -> int:
+    #     return 64*3
     def forward(self, x):
 
     

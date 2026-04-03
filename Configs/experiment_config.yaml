@@ -12,7 +12,7 @@ experiment:
 ## 预处理过后的数据集
 data_dir_dict:
   lob: '/root/autodl-tmp/train_data/lob_data_100ms.parquet'
-  trade: '/root/autodl-tmp/train_data/trade_data_100ms.parquet'
+  # trade: '/root/autodl-tmp/train_data/trade_data_100ms.parquet'
 labels_dir: '/root/autodl-tmp/train_data/labels_100ms.parquet'
 # =============================================================================
 # 数据配置 (所有实验统一)

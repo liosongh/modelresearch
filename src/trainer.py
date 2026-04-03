@@ -16,8 +16,8 @@ import json
 
 import sys
 sys.path.append('..')
-from Utils.metrics import compute_metrics, compute_updown_metrics, get_confusion_matrix
-from Utils.losses import DualLoss
+# from Utils.metrics import compute_metrics, compute_updown_metrics, get_confusion_matrix
+# from Utils.losses import DualLoss
 from .train_utils import EarlyStopping, set_seed
 
 
@@ -27,13 +27,13 @@ class Trainer:
         # model: nn.Module,
         # train_loader: DataLoader,
         # val_loader: DataLoader,
-        loss_fn: DualLoss,
-        optimizer: torch.optim.Optimizer,
-        scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
-        config: Dict = None,
+        loss_fn,
+        optimizer,
+        scheduler = None,
+        config = None,
         # device: str = 'cuda',
-        variant_name: str = None,
-        seed: int = None
+        variant_name = None,
+        seed = None
     ):
         self.device = 'cuda' if torch.cuda.is_available() else 'cpu'
         # self.model = model.to(self.device)

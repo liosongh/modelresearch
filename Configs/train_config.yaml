@@ -45,7 +45,7 @@ training:
   early_stopping:
     enabled: true
     patience: 3
-    min_delta: 0.001
+    min_delta: 0.0
     monitor: "loss"  # 监控指标 "val_f1_updown"
     mode: "min"
 

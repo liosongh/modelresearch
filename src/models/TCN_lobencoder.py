@@ -1,12 +1,12 @@
-from ..layers.tcn import TemporalConvNet
-from ..layers.lob.lob_encoder import LOBEncoder
-from ..layers.lob.level_wise_encoder import LevelWiseEncoder
-from ..layers.lob.deeplob_encoder import Deeplob_encoder_simple,Deeplob_encoder
+from src.layers.tcn import TemporalConvNet
+from src.layers.lob.lob_encoder import LOBEncoder
+from src.layers.lob.level_wise_encoder import LevelWiseEncoder
+from src.layers.lob.deeplob_encoder import Deeplob_encoder_simple,Deeplob_encoder
 import torch
 import torch.nn as nn
 # from torchinfo import summary
 import yaml
-from ..layers.RevIN import RevIN2d
+from src.layers.RevIN import RevIN2d
 
 lob_encoder_dict = {
     'lob_encoder': LOBEncoder,

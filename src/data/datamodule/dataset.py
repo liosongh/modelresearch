@@ -66,6 +66,7 @@ class MultiModalDataset(Dataset):
 
         self.modalities = list(data_dict.keys())
         self.total_len = labels.shape[0]
+        self.num_classes = labels.shape[1]
         self.labels = labels
         
         self.data: Dict[str, torch.Tensor] = data_dict
@@ -80,10 +81,10 @@ class MultiModalDataset(Dataset):
         base_idx = self.valid_indices[index]
         start = base_idx
         end = start + self.T
-        seq_x = {k: torch.from_numpy(v[start:end, :]) for k, v in self.data.items()}
+        seq_x = {k: torch.from_numpy(v[start:end, :]).float() for k, v in self.data.items()}
         
         label_idx = end - 1
-        seq_y = torch.from_numpy(self.labels[label_idx])
+        seq_y = torch.from_numpy(self.labels[label_idx]).float()
         return seq_x, seq_y
 
 
@@ -91,6 +92,11 @@ class MultiModalDataset(Dataset):
 def create_ETHUSDT_dataset(split: str = 'train'):
     data_dict = {k: pl.read_parquet(v) for k, v in data_dir_dict.items()}
     labels= pl.read_parquet(labels_dir)
+    print('读取数据')
+    for k,v in data_dict.items():
+        print(k,v.shape)
+    print('读取标签')
+    print(labels.shape)
 
     if split == 'train':
         data_dict = {k: v.filter(pl.col('time_bucket') < split_ts_ms) for k, v in data_dict.items()}
@@ -106,6 +112,12 @@ def create_ETHUSDT_dataset(split: str = 'train'):
 
     data_dict['lob'] = transform_lob_data(data_dict['lob'],lob_encoder_name)
     labels = labels.drop(['time_bucket']).to_numpy()
+
+    print('转换数据')
+    for k,v in data_dict.items():
+        print(k,v.shape)
+    print('转换标签')
+    print(labels.shape)
     
     return MultiModalDataset(data_dict, labels, augment = False)
 
